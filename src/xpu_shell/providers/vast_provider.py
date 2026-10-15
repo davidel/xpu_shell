@@ -8,6 +8,7 @@ from xpu_shell.providers.base import BaseProvider, Instance
 
 
 VAST_API_BASE = "https://console.vast.ai/api/v0"
+VAST_API_V1_BASE = "https://console.vast.ai/api/v1"
 
 
 def find_vast_api_key(explicit_key: Optional[str] = None) -> Optional[str]:
@@ -107,8 +108,20 @@ class VastProvider(BaseProvider):
       )
     return {"Authorization": f"Bearer {self._api_key}"}
 
-  def _request(self, method: str, endpoint: str, **kwargs) -> Any:
-    url = f"{VAST_API_BASE}{endpoint}"
+  def _request(
+      self,
+      method: str,
+      endpoint: str,
+      api_version: str = "v0",
+      **kwargs
+  ) -> Any:
+    if endpoint.startswith("http://") or endpoint.startswith("https://"):
+      url = endpoint
+    elif endpoint.startswith("/api/"):
+      url = f"https://console.vast.ai{endpoint}"
+    else:
+      base = VAST_API_V1_BASE if api_version == "v1" else VAST_API_BASE
+      url = f"{base}{endpoint}"
     headers = self._get_headers()
     if "headers" in kwargs:
       headers.update(kwargs.pop("headers"))
@@ -128,7 +141,7 @@ class VastProvider(BaseProvider):
     return resp.json()
 
   def list_instances(self) -> List[Instance]:
-    data = self._request("GET", "/instances/")
+    data = self._request("GET", "/instances/", api_version="v1")
     instances = data.get("instances", []) if isinstance(data, dict) else data
     if not isinstance(instances, list):
       instances = []

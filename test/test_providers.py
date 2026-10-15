@@ -147,6 +147,8 @@ class TestVastProvider(unittest.TestCase):
     vast = VastProvider(api_key="fake-vast-key")
     instances = vast.list_instances()
     self.assertEqual(len(instances), 1)
+    called_url = mock_req.call_args[0][1]
+    self.assertIn("/api/v1/instances/", called_url)
     inst = instances[0]
     self.assertEqual(inst.id, "12345")
     self.assertEqual(inst.name, "vast-gpu-node")
