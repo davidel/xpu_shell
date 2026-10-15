@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "runpod-shell"
-version = "0.5.0"
-description = "A Python command-line interface to manage RunPod instances"
+name = "xpu-shell"
+version = "0.6.0"
+description = "A Python command-line interface to manage and supervise AI accelerators"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -16,10 +16,14 @@ classifiers = [
 ]
 dependencies = [
     "runpod",
+    "requests",
 ]
 
 [project.scripts]
-runpod-shell = "runpod_shell.cli:main"
+xpu-shell = "xpu_shell.cli:main"
+xpush = "xpu_shell.cli:main"
+
 
 [tool.setuptools.packages.find]
 where = ["src"]
+

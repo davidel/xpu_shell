@@ -7,10 +7,11 @@ import tempfile
 import time
 import unittest
 
-import runpod_shell.runner as runner
+import xpu_shell.runner as runner
 
 
-RUNNER_PATH = Path(__file__).parent.parent / "src" / "runpod_shell" / "runner.py"
+RUNNER_PATH = Path(__file__).parent.parent / "src" / "xpu_shell" / "runner.py"
+
 
 
 class TestRunnerScript(unittest.TestCase):
@@ -366,8 +367,9 @@ class TestRunnerScript(unittest.TestCase):
       worker_code = (
           f"import sys\n"
           f"sys.path.insert(0, '{src_dir}')\n"
-          f"import runpod_shell.runner as r\n"
+          f"import xpu_shell.runner as r\n"
           f"print(r.allocate_job_id(base_dir='{tdp}'))\n"
+
       )
 
       procs = [

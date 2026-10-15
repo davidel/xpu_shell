@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""RunPod remote job supervisor and process manager.
+"""Remote job supervisor and process manager for XPU Shell.
 
-This script runs on the remote RunPod instance to supervise jobs, record
-environment snapshots, monitor process exit status, detect kernel OOM
+This script runs on the remote instance (RunPod, Vast.ai, etc.) to supervise jobs,
+record environment snapshots, monitor process exit status, detect kernel OOM
 events, and manage job lifecycles.
 """
+
 
 import argparse
 import base64

@@ -1,5 +1,6 @@
-from runpod_shell.cli import main
+from xpu_shell.cli import main
 
 
 if __name__ == "__main__":
   main()
+

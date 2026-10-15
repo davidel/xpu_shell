@@ -1,22 +1,21 @@
-# RunPod Shell CLI
+# XPU Shell (`xpush`)
 
-A Python command-line interface to manage RunPod instances (create, list, stop, and terminate pods) with optional persistent network volumes, customized container environments, and automatic SSH setup.
+A unified command-line interface to provision, execute, and supervise workloads on AI accelerators across multiple cloud providers (**RunPod**, **Vast.ai**, etc.) with persistent network volumes, customized container environments, and automatic SSH setup.
 
 ## Features
 
+- **Multi-Cloud Accelerator Support**: Manage instances across **RunPod** and **Vast.ai** using a single unified CLI, with automatic provider detection from instance IDs or state.
+- **Fast CLI Ergonomics (`xpush`)**: Provided with short `xpush` and full `xpu-shell` command aliases (plus backward-compatible `runpod-shell`).
 - **Docker-like Subcommands**: Simple interface to `create`, `list`, `info`, `stop`, `terminate`, `templates`, `gpus`, `run`, `exec`, and `cp`.
-- **Rich Pod Inspection (`info`)**: Inspect comprehensive pod specifications mimicking the RunPod dashboard "Details" tab, including GPU model, VRAM size, allocated vCPUs, system RAM, disk volumes, live utilization metrics (CPU %, RAM %, GPU %, VRAM %), uptime, datacenter location, and direct SSH connection details.
-- **Automatic Pod & Job Memory**: Automatically remembers the last created pod ID in `~/.config/runpod_shell/.last_pod_id` and the last executed job ID in `~/.config/runpod_shell/.last_job_id` (overrideable with `RUNPOD_SHELL_CONFIG_DIR`, `RUNPOD_SHELL_LAST_POD_ID_FILE`, or `RUNPOD_SHELL_LAST_JOB_ID_FILE`). All pod commands (`run`, `exec`, `ps`, `logs`, `kill`, `cp`, `stop`, `terminate`) work seamlessly without having to re-type the pod ID, and commands managing jobs (`logs`, `kill`) implicitly target the last executed job unless overridden with `-j` / `--job`.
-- **Seamless File Transfers (`cp`)**: Transfer files and directories to and from RunPod instances via `scp` with intuitive `[pod_id:]path` and `:/path` syntax, automatic SSH port & key resolution, recursive copying (`-r`), and attribute preservation (`-P`).
-- **In-Memory Secret & Environment Injection**: Pass sensitive secrets (e.g. S3/GCS keys, R2 tokens) into remote scripts in-memory via SSH with `--env` / `-e` or `--env-file` without persisting credentials to the remote pod disk.
+- **Rich Instance Inspection (`info`)**: Inspect comprehensive specifications including GPU model, VRAM size, allocated vCPUs, system RAM, disk volumes, live utilization metrics (CPU %, RAM %, GPU %, VRAM %), uptime, cost, and direct SSH connection details.
+- **Automatic Instance & Job Memory**: Automatically remembers the last created instance ID and provider in `~/.config/xpu_shell/.last_pod_id` and the last executed job ID in `~/.config/xpu_shell/.last_job_id`. All commands (`run`, `exec`, `ps`, `logs`, `kill`, `cp`, `stop`, `terminate`) work seamlessly without having to re-type the instance ID.
+
+- **Seamless File Transfers (`cp`)**: Transfer files and directories to and from remote instances via `scp` with intuitive `[instance_id:]path` and `:/path` syntax, automatic SSH port & key resolution, recursive copying (`-r`), and attribute preservation (`-P`).
+- **In-Memory Secret & Environment Injection**: Pass sensitive secrets (e.g. S3/GCS keys, R2 tokens) into remote scripts in-memory via SSH with `--env` / `-e` or `--env-file` without persisting credentials to the remote disk.
 - **Graceful Job Termination**: Kills remote jobs by sending `SIGTERM` first, monitoring exit status, and escalating to `SIGKILL` after a configurable timeout (default: 30s).
-- **Template Management & Image Resolution**: Browse and filter pod templates using `templates`, and launch pods via `--template-id` with automatic base image resolution.
-- **GPU Querying & Resolution**: List all available GPU types using the `gpus` subcommand with regex filtering, and use case-insensitive, unique substring, or fuzzy matching auto-resolution for `--gpu-type` values (e.g. `4090` auto-resolves to `NVIDIA GeForce RTX 4090`).
+- **GPU Querying & Marketplace Resolution**: List available GPU types and pricing using `gpus` with regex filtering across RunPod or Vast.ai.
 - **Smart SSH Key Auto-Detection**: Searches for standard SSH public keys (`id_rsa.pub`, `id_ed25519.pub`, `id_ecdsa.pub`, `id_dsa.pub`) in your local `~/.ssh/` directory automatically.
-- **SSH Isolation & Sandbox Support**: Support for custom SSH config files via `--ssh-config` or `RUNPOD_SSH_CONFIG` (e.g. `/dev/null`), preventing "Bad owner or permissions" errors when running inside Bubblewrap, containers, or restricted user namespaces.
-- **Python Package Management**: Resolves packages from `requirements.txt` (or custom path) and `--pip-packages` (CLI) and installs them directly to system Python with global pip configuration, utilizing pre-installed PyTorch and CUDA runtimes without redundant downloads.
-- **Container Customization**: Merges CLI and file-based apt packages (via `--apt-packages` and `--apt-packages-file`) and loads credentials from a `.env` file (via `--env-file`).
-- **Real SSH Address Output**: Resolves the exact host IP and external port from RunPod to print a ready-to-use SSH connection string.
+- **SSH Isolation & Sandbox Support**: Support for custom SSH config files via `--ssh-config` or `RUNPOD_SSH_CONFIG` / `XPU_SSH_CONFIG` (e.g. `/dev/null`).
 
 ---
 
@@ -24,12 +23,7 @@ A Python command-line interface to manage RunPod instances (create, list, stop, 
 
 1. **Install the package**:
 
-   From PyPI:
-   ```bash
-   pip install runpod-shell
-   ```
-
-   Or from source:
+   From source:
    ```bash
    pip install .
    ```
@@ -39,88 +33,92 @@ A Python command-line interface to manage RunPod instances (create, list, stop, 
    ```
 
 2. **Environment Variables**:
-   Obtain an API key from your RunPod settings and expose it:
+   Set your provider API keys as needed:
    ```bash
+   # For RunPod:
    export RUNPOD_API_KEY="your_runpod_api_key"
+
+   # For Vast.ai:
+   export VAST_API_KEY="your_vast_api_key"
+   # (Vast also automatically detects ~/.vast_api_key)
    ```
 
-   *(Optional)* When running within sandboxed or containerized environments (e.g. Bubblewrap), bypass system SSH config ownership checks:
+   *(Optional)* Configure or isolate the persistence directory (defaults to `~/.config/xpu_shell`):
    ```bash
-   export RUNPOD_SSH_CONFIG="/dev/null"
+   export XPU_SHELL_CONFIG_DIR="/path/to/config"
    ```
 
-   *(Optional)* Configure or isolate the pod and job ID persistence directory (defaults to `~/.config/runpod_shell`):
-   ```bash
-   export RUNPOD_SHELL_CONFIG_DIR="/path/to/config"
-   # or specify the exact file paths:
-   export RUNPOD_SHELL_LAST_POD_ID_FILE="/path/to/.last_pod_id"
-   export RUNPOD_SHELL_LAST_JOB_ID_FILE="/path/to/.last_job_id"
-   ```
+> **Note:** Once installed, both `xpush` and `xpu-shell` are available in your `PATH`.
 
-> **Note:** Once installed, the `runpod-shell` executable is available in your `PATH`. Alternatively, you can run commands via the Python module syntax: `python3 -m runpod_shell <subcommand>`.
 
 ---
 
 ## Command Reference
 
-### Global Option
-Every subcommand supports passing the API key directly:
-*   `--api-key`: RunPod API key (or uses the local `RUNPOD_API_KEY` env var).
+### Global Options
+Every subcommand supports the following options:
+* `--api-key`: API key for the active provider (RunPod or Vast.ai). Defaults to `RUNPOD_API_KEY` or `VAST_API_KEY` / `~/.vast_api_key`.
+* `--provider`: Target provider (`runpod` or `vast`). Defaults to auto-detecting from the target ID, the last used provider in `~/.config/xpu_shell/.last_provider`, or `runpod`.
 
 ---
 
 ### 1. `create`
-Launches and configures a new RunPod instance.
+Launches and configures a new instance on RunPod or Vast.ai.
 
 ```bash
-runpod-shell create [OPTIONS]
+xpush create [OPTIONS]
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--name` | `persistent-worker` | Name of the RunPod instance |
-| `--template-id` | *None* | Pod Template ID to deploy (auto-resolves container image name) |
-| `--image-name` | `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` | Base image for the container (optional if `--template-id` is provided) |
-| `--gpu-type` | `NVIDIA GeForce RTX 4090` | GPU type ID to provision (supports case-insensitive, unique substring, and fuzzy matching, e.g. `4090`) |
+| `--provider` | `runpod` | Target cloud provider (`runpod` or `vast`) |
+| `--offer-id` | *None* | Direct Vast.ai offer/ask ID to rent (Vast.ai only) |
+| `--name` | `persistent-worker` | Name of the instance |
+| `--template-id` | *None* | Pod Template ID to deploy (RunPod only; auto-resolves container image name) |
+| `--image-name` | `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` | Base image for the container (defaults to `pytorch/pytorch:latest` on Vast) |
+| `--gpu-type` | `NVIDIA GeForce RTX 4090` | GPU type to provision (supports substring and fuzzy matching, e.g. `4090`) |
 | `--gpu-count` | `1` | Number of GPUs to allocate |
-| `--volume-id` | *None* | Persistent Network Volume ID to mount |
-| `--volume-size` | `50` | Container disk size in GB |
+| `--volume-id` | *None* | Persistent Network Volume ID to mount (RunPod only) |
+| `--volume-size` | `50` | Volume disk size in GB |
 | `--ssh-key-path` | *None* | Path to public key (checks default paths if omitted) |
 | `--requirements-path` | *None* | Path to `requirements.txt` file |
 | `--pip-packages` | *None* | Extra Python packages to install |
 | `--apt-packages` | *None* | Extra apt packages to install (default: `screen curl htop ffmpeg git`) |
 | `--apt-packages-file` | *None* | Path to a file containing extra apt packages to install |
-| `--env` | *None* | Environment variables (e.g. `KEY=VALUE`, or RunPod dashboard secret references `KEY='{{ RUNPOD_SECRET_<NAME> }}'`) |
-| `--env-file` | *None* | Path to a `.env` file containing environment variables (supports RunPod dashboard secret references) |
+| `--env` | *None* | Environment variables (`KEY=VALUE`, or RunPod secret references `KEY='{{ RUNPOD_SECRET_<NAME> }}'`) |
+| `--env-file` | *None* | Path to a `.env` file containing environment variables |
 | `--ports` | `22/tcp` | Container ports to expose |
-| `--docker-args` | *None* | Optional custom docker arguments to override container entrypoint |
-| `--cloud-type` | `SECURE` | Type of cloud network (`SECURE`, `COMMUNITY`, or `ALL`) |
+| `--docker-args` | *None* | Optional custom docker arguments |
+| `--cloud-type` | `SECURE` | Type of cloud network (`SECURE`, `COMMUNITY`, or `ALL` on RunPod) |
 | `--container-disk-size` | `30` | Container local disk size in GB |
-| `--volume-mount-path` | `/workspace` | Path inside container where the network volume is mounted |
+| `--volume-mount-path` | `/workspace` | Path inside container where the volume is mounted |
 | `--vcpu-count` | `4` | Minimum number of vCPUs to allocate |
 | `--memory` | `8` | Minimum CPU RAM in GB to allocate |
-| `--run-script` | *None* | Path to a local script to execute on the pod via SSH once initialized |
+| `--run-script` | *None* | Path to a local script to execute on the instance via SSH once initialized |
 | `--script-args` | `""` | String arguments to pass to the script |
 | `-d`, `--detach` | `False` | Run script in background without waiting / streaming |
 | `--ssh-private-key-path` | *None* | Path to private SSH key (auto-detected if omitted) |
-| `--ssh-config` | *None* (or `$RUNPOD_SSH_CONFIG`) | Path to custom SSH config file (e.g. `/dev/null`, or `system`) |
+| `--ssh-config` | *None* | Path to custom SSH config file (e.g. `/dev/null`, or `system`) |
 | `--no-wait-for-setup` | `False` | Do not wait for container disk setup to complete before executing script |
 | `--ssh-timeout` | `180` | Max seconds to wait for SSH and setup readiness |
 
 > [!TIP]
-> Creating a pod automatically saves its ID to `~/.config/runpod_shell/.last_pod_id` so subsequent commands (`exec`, `ps`, `logs`, etc.) can be run without passing the pod ID.
-
-> [!NOTE]
-> **RunPod Dashboard Secrets:** RunPod dashboard secrets are supported naturally when creating pods. Pass environment variable values formatted with the template syntax `{{ RUNPOD_SECRET_<SECRET_NAME> }}` (e.g. `--env 'HF_TOKEN={{ RUNPOD_SECRET_HF_TOKEN }}'` or via `--env-file`). RunPod's control plane resolves and substitutes these secrets server-side during container initialization. Quote the CLI argument to prevent shell expansion.
+> Creating an instance automatically saves its ID and provider to `~/.config/xpu_shell/.last_pod_id` and `~/.config/xpu_shell/.last_provider`, so subsequent commands (`exec`, `ps`, `logs`, etc.) seamlessly target it without passing any flags.
 
 ---
 
 ### 2. `list`
-Lists all active and stopped pods associated with your account, showing Pod ID, Name, Status, GPU type, and connection endpoint.
+Lists active and stopped instances associated with your account, showing Instance ID, Name, Status, GPU type, and SSH connection endpoint.
 
 ```bash
-runpod-shell list
+# List instances for default/current provider:
+xpush list
+
+# Or specify a provider explicitly:
+xpush list --provider vast
+xpush list --provider runpod
 ```
+
 
 ---
 
@@ -129,15 +127,15 @@ Shows detailed information about a specific pod or the last created/used pod (mi
 
 ```bash
 # Show info for the last created pod
-runpod-shell info
+xpush info
 
 # Specify a pod explicitly
-runpod-shell info <pod-id>
-runpod-shell info -p <pod-id>
-runpod-shell info --pod <pod-id>
+xpush info <pod-id>
+xpush info -p <pod-id>
+xpush info --pod <pod-id>
 
 # Output raw JSON
-runpod-shell info <pod-id> --json
+xpush info <pod-id> --json
 ```
 
 | Argument / Flag | Default | Description |
@@ -153,12 +151,12 @@ Lists available pod templates associated with your account and public library, s
 
 ```bash
 # List all templates
-runpod-shell templates
+xpush templates
 
 # Filter templates by pattern (case-insensitive regex)
-runpod-shell templates pytorch
-runpod-shell templates "vllm|tgi"
-runpod-shell templates -r "pytorch|cuda"
+xpush templates pytorch
+xpush templates "vllm|tgi"
+xpush templates -r "pytorch|cuda"
 ```
 
 | Argument / Flag | Default | Description |
@@ -173,12 +171,12 @@ Stops a running pod (releases GPU resources, but retains data on the persistent 
 
 ```bash
 # Stop the last created pod
-runpod-shell stop
+xpush stop
 
 # Or specify a pod explicitly
-runpod-shell stop <pod-id>
-runpod-shell stop -p <pod-id>
-runpod-shell stop --pod <pod-id>
+xpush stop <pod-id>
+xpush stop -p <pod-id>
+xpush stop --pod <pod-id>
 ```
 
 | Argument / Flag | Default | Description |
@@ -193,12 +191,12 @@ Deletes a pod and releases all associated resources. If `<pod-id>` is omitted, a
 
 ```bash
 # Terminate the last created pod
-runpod-shell terminate
+xpush terminate
 
 # Or specify a pod explicitly
-runpod-shell terminate <pod-id>
-runpod-shell terminate -p <pod-id>
-runpod-shell terminate --pod <pod-id>
+xpush terminate <pod-id>
+xpush terminate -p <pod-id>
+xpush terminate --pod <pod-id>
 ```
 
 | Argument / Flag | Default | Description |
@@ -213,12 +211,12 @@ Retrieves and lists all available GPU models, including display names, VRAM size
 
 ```bash
 # List all GPUs
-runpod-shell gpus
+xpush gpus
 
 # Filter by regex (positional or --regex/-r/--filter flag)
-runpod-shell gpus 4090
-runpod-shell gpus "A100|H100"
-runpod-shell gpus -r "RTX 40\d0"
+xpush gpus 4090
+xpush gpus "A100|H100"
+xpush gpus -r "RTX 40\d0"
 ```
 
 | Argument / Flag | Default | Description |
@@ -229,28 +227,28 @@ runpod-shell gpus -r "RTX 40\d0"
 ---
 
 ### 8. `exec`
-Uploads and executes an arbitrary local script on an active pod via SSH. Supports foreground streaming or detached background execution, in-memory environment variable injection, and default pod resolution. Automatically remembers the executed Job ID in `~/.config/runpod_shell/.last_job_id`.
+Uploads and executes an arbitrary local script on an active instance via SSH. Supports foreground streaming or detached background execution, in-memory environment variable injection, and default instance resolution. Automatically remembers the executed Job ID in `~/.config/xpu_shell/.last_job_id`.
 
 ```bash
-# Execute on the last created pod
-runpod-shell exec <script-path> [OPTIONS]
+# Execute on the last created instance
+xpush exec <script-path> [OPTIONS]
 
-# Specify pod ID explicitly
-runpod-shell exec <pod-id> <script-path> [OPTIONS]
-runpod-shell exec -p <pod-id> <script-path> [OPTIONS]
+# Specify instance ID explicitly
+xpush exec <instance-id> <script-path> [OPTIONS]
+xpush exec -p <instance-id> <script-path> [OPTIONS]
 ```
 
 | Argument / Flag | Default | Description |
 |---|---|---|
-| `script-path` | *Required* | Path to the local script to run (or 2nd positional if pod ID is given first) |
-| `pod-id` | *None* | Optional target pod ID if passed as the first positional argument |
-| `-p`, `--pod` | *None* | Target pod ID (defaults to last created pod) |
+| `script-path` | *Required* | Path to the local script to run (or 2nd positional if instance ID is given first) |
+| `pod-id` | *None* | Optional target instance ID if passed as the first positional argument |
+| `-p`, `--pod` | *None* | Target instance ID (defaults to last created instance) |
 | `-e`, `--env` | *None* | Environment variable to inject into the remote process in-memory (`KEY=VALUE` or `KEY` to inherit value from local environment). Can accept multiple variables or be repeated. |
 | `--env-file`, `--env_file` | *None* | Path to local `.env` file to inject into the remote process in-memory without persisting credentials to remote disk. Can be specified multiple times. |
 | `--script-args` | `""` | String arguments to pass to the script |
 | `-d`, `--detach` | `False` | Run script in background without waiting / streaming |
 | `--ssh-private-key-path` | *None* | Path to private SSH key (auto-detected if omitted) |
-| `--ssh-config` | *None* (or `$RUNPOD_SSH_CONFIG`) | Path to custom SSH config file (e.g. `/dev/null`, or `system`) |
+| `--ssh-config` | *None* | Path to custom SSH config file (e.g. `/dev/null`, or `system`) |
 | `--no-wait-for-setup` | `False` | Do not wait for container disk setup to complete |
 | `--ssh-timeout` | `180` | Max seconds to wait for SSH and setup readiness |
 | `-v`, `--verbose` | `False` | Show detailed job information and connection progress |
@@ -258,22 +256,23 @@ runpod-shell exec -p <pod-id> <script-path> [OPTIONS]
 ---
 
 ### 9. `run`
-Executes an arbitrary command line directly (binary + args) on an active pod via SSH. Supports foreground streaming or detached background execution, in-memory environment variable injection, and default pod resolution. Automatically remembers the executed Job ID in `~/.config/runpod_shell/.last_job_id`.
+Executes an arbitrary command line directly (binary + args) on an active instance via SSH. Supports foreground streaming or detached background execution, in-memory environment variable injection, and default instance resolution. Automatically remembers the executed Job ID in `~/.config/xpu_shell/.last_job_id`.
+
 
 ```bash
 # Run command on the last created pod
-runpod-shell run python3 -c "print('hello')"
-runpod-shell run nvidia-smi
+xpush run python3 -c "print('hello')"
+xpush run nvidia-smi
 
 # Pass arguments and options to the remote command
-runpod-shell run python train.py --epochs 10 --batch-size 32
+xpush run python train.py --epochs 10 --batch-size 32
 
 # Run via remote shell (enables wildcards, pipes, redirections, and command chaining)
-runpod-shell run -s mv '/workspace/temp/co*' /workspace/
-runpod-shell run --shell "cat /workspace/data.jsonl | grep ERROR > /workspace/errors.log"
+xpush run -s mv '/workspace/temp/co*' /workspace/
+xpush run --shell "cat /workspace/data.jsonl | grep ERROR > /workspace/errors.log"
 
 # Run detached in background on a specific pod
-runpod-shell run -p <pod-id> -d python train.py
+xpush run -p <pod-id> -d python train.py
 ```
 
 | Argument / Flag | Default | Description |
@@ -293,16 +292,16 @@ runpod-shell run -p <pod-id> -d python train.py
 ---
 
 ### 10. `ps`
-Lists remote processes and background jobs managed by `runpod-shell` on the pod, including Job ID, PID, running/completed/failed status, start time, duration, and log file path. If `<pod-id>` is omitted, automatically targets the last created pod.
+Lists remote processes and background jobs managed by `xpush` on the pod, including Job ID, PID, running/completed/failed status, start time, duration, and log file path. If `<pod-id>` is omitted, automatically targets the last created pod.
 
 ```bash
 # List jobs on the last created pod
-runpod-shell ps
+xpush ps
 
 # Or specify a pod explicitly
-runpod-shell ps <pod-id>
-runpod-shell ps -p <pod-id>
-runpod-shell ps --pod <pod-id>
+xpush ps <pod-id>
+xpush ps -p <pod-id>
+xpush ps --pod <pod-id>
 ```
 
 | Argument / Flag | Default | Description |
@@ -319,15 +318,15 @@ Inspects remote execution logs with full display (`cat`), tailing the last N lin
 
 ```bash
 # Follow logs on the last executed job on the default pod
-runpod-shell logs -f
+xpush logs -f
 
 # View full logs of a specific job on the default pod
-runpod-shell logs -j <job-id>
-runpod-shell logs <job-id>
+xpush logs -j <job-id>
+xpush logs <job-id>
 
 # Show last 100 lines for a specific pod and job
-runpod-shell logs -p <pod-id> -j <job-id> -n 100
-runpod-shell logs -p <pod-id> -j <job-id> -f
+xpush logs -p <pod-id> -j <job-id> -n 100
+xpush logs -p <pod-id> -j <job-id> -f
 ```
 
 | Argument / Flag | Default | Description |
@@ -349,14 +348,14 @@ Terminates a remote job and its entire process group. By default, sends `SIGTERM
 
 ```bash
 # Kill the last executed job on the last created pod
-runpod-shell kill
+xpush kill
 
 # Kill a specific job on the default pod
-runpod-shell kill -j <job-id-or-pid> [OPTIONS]
-runpod-shell kill <job-id-or-pid> [OPTIONS]
+xpush kill -j <job-id-or-pid> [OPTIONS]
+xpush kill <job-id-or-pid> [OPTIONS]
 
 # Specify pod ID and job ID explicitly
-runpod-shell kill -p <pod-id> -j <job-id-or-pid> [OPTIONS]
+xpush kill -p <pod-id> -j <job-id-or-pid> [OPTIONS]
 ```
 
 | Argument / Flag | Default | Description |
@@ -382,16 +381,16 @@ Remote paths are distinguished by a colon (`:`):
 
 ```bash
 # Copy local file to the default pod's /workspace
-runpod-shell cp myfile.tar.gz :/workspace/
+xpush cp myfile.tar.gz :/workspace/
 
 # Copy a file from a specific pod to the current local directory
-runpod-shell cp <pod-id>:/workspace/results.csv ./
+xpush cp <pod-id>:/workspace/results.csv ./
 
 # Recursively copy a remote directory to local
-runpod-shell cp -r :/workspace/checkpoints/ ./checkpoints/
+xpush cp -r :/workspace/checkpoints/ ./checkpoints/
 
 # Copy matching files using remote wildcards (quote to prevent local expansion)
-runpod-shell cp ':/workspace/temp/co*' ./
+xpush cp ':/workspace/temp/co*' ./
 ```
 
 | Argument / Flag | Default | Description |
@@ -406,53 +405,65 @@ runpod-shell cp ':/workspace/temp/co*' ./
 
 ---
 
-## Examples
+### Examples
 
-### Launch with default settings
+### Launch on RunPod (default)
 ```bash
-runpod-shell create
-# The newly created Pod ID is automatically remembered!
+xpush create
+# The newly created instance ID is automatically remembered!
 ```
 
-### Launch using a Template ID
+### Launch on Vast.ai
+```bash
+# Search available GPU offers and pricing on Vast.ai:
+xpush gpus --provider vast -r 4090
+
+# Auto-rent the cheapest available RTX 4090 offer on Vast.ai:
+xpush create --provider vast --gpu-type 4090
+
+# Or rent a specific Vast.ai offer ID directly:
+xpush create --provider vast --offer-id 1234567
+```
+
+### Launch using a Template ID (RunPod)
 ```bash
 # Search for templates
-runpod-shell templates pytorch
+xpush templates pytorch
 
 # Create pod from template
-runpod-shell create --template-id "runpod-pytorch" --gpu-type 4090
+xpush create --template-id "runpod-pytorch" --gpu-type 4090
 ```
 
 ### Launch attaching a Network Volume and Python requirements
 ```bash
-runpod-shell create --volume-id "vol-abc123xyz" --requirements-path requirements.txt
+xpush create --volume-id "vol-abc123xyz" --requirements-path requirements.txt
 ```
 
 ### Run commands or scripts with in-memory secrets and monitor jobs
 ```bash
-# Execute a command directly in the background with in-memory credentials
-runpod-shell run -d -e R2_TOKEN R2_ACCESS_KEY_ID python train.py --epochs 50
-# Both the target Pod ID and newly launched Job ID are remembered automatically!
+# Execute a command directly in the background with in-memory credentials:
+# (Works seamlessly on both RunPod and Vast.ai!)
+xpush run -d -e R2_TOKEN R2_ACCESS_KEY_ID python train.py --epochs 50
 
 # Or upload and run a local script
-runpod-shell exec -d ./train.py
+xpush exec -d ./train.py
 
-# Check process status on default pod
-runpod-shell ps
+# Check process status on default instance
+xpush ps
 
-# Follow logs in real-time (automatically targets the last job ID on default pod)
-runpod-shell logs -f
+# Follow logs in real-time (automatically targets the last job ID on default instance)
+xpush logs -f
 
 # Or view logs for a specific job explicitly
-runpod-shell logs -j job-1788613220-1817e4 -f
+xpush logs -j job-1788613220-1817e4 -f
 
 # Terminate gracefully (automatically targets the last job ID, or specify with -j)
-runpod-shell kill
+xpush kill
 ```
 
 ### Fully customized creation
 ```bash
-runpod-shell create \
+xpush create \
   --image-name "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-ubuntu22.04" \
   --gpu-type "NVIDIA RTX A6000" \
   --gpu-count 2 \
@@ -460,24 +471,17 @@ runpod-shell create \
   --pip-packages torchinfo matplotlib
 ```
 
-### Launch using RunPod Dashboard Secrets
-```bash
-# Pass dashboard secrets directly via --env (quote to avoid shell expansion)
-runpod-shell create \
-  --env 'HF_TOKEN={{ RUNPOD_SECRET_HF_TOKEN }}' \
-  --env 'WANDB_API_KEY={{ RUNPOD_SECRET_WANDB_API_KEY }}'
-```
-
 ### Running inside a Bubblewrap Sandbox or Container
 When running inside unprivileged user namespaces or Bubblewrap sandboxes, host system files under `/etc/ssh/ssh_config.d/` can trigger OpenSSH `Bad owner or permissions` errors. You can bypass them either globally:
 
 ```bash
 export RUNPOD_SSH_CONFIG="/dev/null"
-runpod-shell exec ./train.py
+xpush exec ./train.py
 ```
 
 Or per-command using `--ssh-config`:
 
 ```bash
-runpod-shell exec ./train.py --ssh-config /dev/null
+xpush exec ./train.py --ssh-config /dev/null
 ```
+

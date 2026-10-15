@@ -10,7 +10,7 @@ import sys
 import time
 import runpod
 
-from runpod_shell.ssh_runner import (
+from xpu_shell.ssh_runner import (
     find_ssh_private_key,
     resolve_ssh_config,
     execute_remote_script,
@@ -21,6 +21,12 @@ from runpod_shell.ssh_runner import (
     wait_for_ssh,
     build_ssh_cmd,
     build_cp_cmd
+)
+from xpu_shell.providers import (
+    get_provider,
+    resolve_provider,
+    save_last_provider,
+    get_last_provider
 )
 
 
@@ -50,32 +56,34 @@ class ParseEnv(argparse.Action):
     setattr(namespace, self.dest, env_dict)
 
 
-CONFIG_DIR = Path.home() / ".config" / "runpod_shell"
+CONFIG_DIR = Path.home() / ".config" / "xpu_shell"
 LAST_POD_ID_FILE = CONFIG_DIR / ".last_pod_id"
 LAST_JOB_ID_FILE = CONFIG_DIR / ".last_job_id"
 
 
 def get_config_dir():
-  custom_dir = os.environ.get("RUNPOD_SHELL_CONFIG_DIR")
+  custom_dir = os.environ.get("XPU_SHELL_CONFIG_DIR")
   if custom_dir:
     return Path(custom_dir)
   return CONFIG_DIR
 
 
 def get_last_pod_id_file():
-  custom_file = os.environ.get("RUNPOD_SHELL_LAST_POD_ID_FILE")
+  custom_file = os.environ.get("XPU_SHELL_LAST_POD_ID_FILE")
   if custom_file:
     return Path(custom_file)
-  if "RUNPOD_SHELL_CONFIG_DIR" in os.environ:
+  if "XPU_SHELL_CONFIG_DIR" in os.environ:
     return get_config_dir() / ".last_pod_id"
   return LAST_POD_ID_FILE
 
 
-def save_last_pod_id(pod_id):
+def save_last_pod_id(pod_id, provider=None):
   try:
     target_file = get_last_pod_id_file()
     target_file.parent.mkdir(parents=True, exist_ok=True)
     target_file.write_text(str(pod_id).strip())
+    if provider:
+      save_last_provider(provider)
   except Exception:
     pass
 
@@ -102,10 +110,10 @@ def clear_last_pod_id_if_match(pod_id):
 
 
 def get_last_job_id_file():
-  custom_file = os.environ.get("RUNPOD_SHELL_LAST_JOB_ID_FILE")
+  custom_file = os.environ.get("XPU_SHELL_LAST_JOB_ID_FILE")
   if custom_file:
     return Path(custom_file)
-  if "RUNPOD_SHELL_CONFIG_DIR" in os.environ:
+  if "XPU_SHELL_CONFIG_DIR" in os.environ:
     return get_config_dir() / ".last_job_id"
   return LAST_JOB_ID_FILE
 
@@ -138,6 +146,8 @@ def clear_last_job_id_if_match(job_id):
       target_file.unlink(missing_ok=True)
   except Exception:
     pass
+
+
 
 
 def resolve_pod_id(args):
@@ -514,7 +524,32 @@ def get_pod_ssh_endpoint(pod_info):
   return ssh_host, ssh_port
 
 
+def resolve_instance_ssh_endpoint(target_pod_id, args, verbose=False):
+  if verbose:
+    print(f"Fetching connection details for pod '{target_pod_id}'...", file=sys.stderr)
+  provider = resolve_provider(args=args, instance_id=target_pod_id)
+  if provider.name == "runpod":
+    try:
+      pod_info = runpod.get_pod(target_pod_id)
+    except Exception as e:
+      fatal(f"Failed to fetch pod info: {e}", exc=e.__class__)
+    if not pod_info:
+      fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
+    ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
+  else:
+    try:
+      inst = provider.get_instance(target_pod_id)
+      ssh_host, ssh_port = inst.ssh_host, inst.ssh_port
+    except Exception as e:
+      fatal(f"Failed to fetch instance info: {e}", exc=e.__class__)
+
+  if not ssh_host or not ssh_port or ssh_port == "unknown":
+    fatal(f"Could not resolve SSH endpoint for pod '{target_pod_id}'. Is the pod running and exposing port 22?")
+  return ssh_host, ssh_port
+
+
 def cmd_create(args):
+
   # Resolve and validate GPU type
   valid_gpus = get_valid_gpus()
   gpu_type = resolve_gpu_type(args.gpu_type, valid_gpus)
@@ -559,84 +594,137 @@ def cmd_create(args):
   if not template_id and not image_name:
     fatal("Either --template-id or --image-name must be specified.", ValueError)
 
-  # Launch Pod
-  print(f"Launching RunPod instance '{args.name}'...")
-  create_args = {
-      "name": args.name,
-      "gpu_type_id": gpu_type,
-      "gpu_count": args.gpu_count,
-      "container_disk_in_gb": args.container_disk_size,
-      "volume_in_gb": args.volume_size,
-      "volume_mount_path": args.volume_mount_path,
-      "ports": args.ports,
-      "env": container_env,
-      "cloud_type": args.cloud_type,
-      "min_vcpu_count": args.vcpu_count,
-      "min_memory_in_gb": args.memory
-  }
-
-  if getattr(args, "docker_args", None):
-    create_args["docker_args"] = args.docker_args
-
-  if template_id:
-    create_args["template_id"] = template_id
-    template = get_pod_template(template_id)
-    if not template or not template.get("imageName"):
-      fatal(f"Template '{template_id}' not found or does not specify an image name.", ValueError)
-    create_args["image_name"] = template["imageName"]
-  else:
-    create_args["image_name"] = image_name
-
-  if args.volume_id:
-    create_args["network_volume_id"] = args.volume_id
-
-  try:
-    pod = runpod.create_pod(**create_args)
-  except Exception as e:
-    fatal(f"Failed to create pod: {e}", exc=e.__class__)
-
-  save_last_pod_id(pod["id"])
-
-  # Wait for the pod to boot up
-  print("Waiting for pod to initialize...")
-  start_poll = time.time()
-  poll_timeout = getattr(args, "ssh_timeout", 180)
-  if poll_timeout < 300:
-    poll_timeout = 300
-  pod_info = None
-  last_status = None
-
-  while time.time() - start_poll < poll_timeout:
+  provider = resolve_provider(args=args)
+  if provider.name == "vast":
+    print(f"Launching Vast.ai instance '{args.name}'...")
     try:
-      pod_info = runpod.get_pod(pod["id"])
+      disk_total = float(args.container_disk_size) + float(args.volume_size or 0)
+      inst = provider.create_instance(
+          gpu_name=args.gpu_type,
+          image_name=image_name or "pytorch/pytorch:latest",
+          disk_gb=disk_total,
+          env=container_env,
+          offer_id=getattr(args, "offer_id", None),
+          gpu_count=args.gpu_count
+      )
     except Exception as e:
-      print(f"Error polling pod status: {e}")
+      fatal(f"Failed to create Vast.ai instance: {e}", exc=e.__class__)
+
+    save_last_pod_id(inst.id)
+    save_last_provider("vast")
+
+
+    print("Waiting for instance to initialize...")
+    start_poll = time.time()
+    poll_timeout = getattr(args, "ssh_timeout", 180)
+    if poll_timeout < 300:
+      poll_timeout = 300
+    ssh_host = None
+    ssh_port = None
+    last_status = None
+    while time.time() - start_poll < poll_timeout:
+      try:
+        inst = provider.get_instance(inst.id)
+      except Exception:
+        time.sleep(5)
+        continue
+
+      if inst.status in ("TERMINATED", "FAILED", "DEAD"):
+        fatal(f"Instance initialization failed with status: {inst.status}")
+
+      if inst.status != last_status:
+        last_status = inst.status
+        print(f"Instance status: {inst.status}")
+
+      if inst.status == "RUNNING" and inst.ssh_host and inst.ssh_port:
+        ssh_host = inst.ssh_host
+        ssh_port = inst.ssh_port
+        break
       time.sleep(5)
-      continue
+    else:
+      fatal(f"Timed out waiting for Vast.ai instance '{inst.id}' to become ready after {poll_timeout} seconds.")
+  else:
+    # Launch Pod on RunPod
+    print(f"Launching RunPod instance '{args.name}'...")
+    create_args = {
+        "name": args.name,
+        "gpu_type_id": gpu_type,
+        "gpu_count": args.gpu_count,
+        "container_disk_in_gb": args.container_disk_size,
+        "volume_in_gb": args.volume_size,
+        "volume_mount_path": args.volume_mount_path,
+        "ports": args.ports,
+        "env": container_env,
+        "cloud_type": args.cloud_type,
+        "min_vcpu_count": args.vcpu_count,
+        "min_memory_in_gb": args.memory
+    }
 
-    if not pod_info:
+    if getattr(args, "docker_args", None):
+      create_args["docker_args"] = args.docker_args
+
+    if template_id:
+      create_args["template_id"] = template_id
+      template = get_pod_template(template_id)
+      if not template or not template.get("imageName"):
+        fatal(f"Template '{template_id}' not found or does not specify an image name.", ValueError)
+      create_args["image_name"] = template["imageName"]
+    else:
+      create_args["image_name"] = image_name
+
+    if args.volume_id:
+      create_args["network_volume_id"] = args.volume_id
+
+    try:
+      pod = runpod.create_pod(**create_args)
+    except Exception as e:
+      fatal(f"Failed to create pod: {e}", exc=e.__class__)
+
+    save_last_pod_id(pod["id"])
+    save_last_provider("runpod")
+
+
+    # Wait for the pod to boot up
+    print("Waiting for pod to initialize...")
+    start_poll = time.time()
+    poll_timeout = getattr(args, "ssh_timeout", 180)
+    if poll_timeout < 300:
+      poll_timeout = 300
+    pod_info = None
+    last_status = None
+
+    while time.time() - start_poll < poll_timeout:
+      try:
+        pod_info = runpod.get_pod(pod["id"])
+      except Exception as e:
+        print(f"Error polling pod status: {e}")
+        time.sleep(5)
+        continue
+
+      if not pod_info:
+        time.sleep(5)
+        continue
+
+      status = pod_info.get("desiredStatus") or pod_info.get("status")
+      if status in ("EXITED", "TERMINATED", "FAILED", "DEAD"):
+        fatal(f"Pod initialization failed with status: {status}")
+
+      if status != last_status:
+        last_status = status
+        print(f"Pod status: {status}")
+
+      ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
+      if status == "RUNNING" and ssh_host and ssh_port and ssh_port != "unknown":
+        break
+
       time.sleep(5)
-      continue
-
-    status = pod_info.get("desiredStatus") or pod_info.get("status")
-    if status in ("EXITED", "TERMINATED", "FAILED", "DEAD"):
-      fatal(f"Pod initialization failed with status: {status}")
-
-    if status != last_status:
-      last_status = status
-      print(f"Pod status: {status}")
+    else:
+      fatal(f"Timed out waiting for pod '{pod['id']}' to become ready after {poll_timeout} seconds.")
 
     ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
-    if status == "RUNNING" and ssh_host and ssh_port and ssh_port != "unknown":
-      break
+    if not ssh_host or not ssh_port or ssh_port == "unknown":
+      fatal(f"Could not resolve SSH endpoint for pod '{pod['id']}'.")
 
-    time.sleep(5)
-  else:
-    fatal(f"Timed out waiting for pod '{pod['id']}' to become ready after {poll_timeout} seconds.")
-
-  ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
-  if not ssh_host or not ssh_port or ssh_port == "unknown":
-    fatal(f"Could not resolve SSH endpoint for pod '{pod['id']}'.")
 
   ssh_config = getattr(args, "ssh_config", None)
   resolved_cfg = resolve_ssh_config(ssh_config)
@@ -718,19 +806,8 @@ def cmd_exec(args):
     )
 
   verbose = getattr(args, "verbose", False)
-  if verbose:
-    print(f"Fetching connection details for pod '{target_pod_id}'...", file=sys.stderr)
-  try:
-    pod_info = runpod.get_pod(target_pod_id)
-  except Exception as e:
-    fatal(f"Failed to fetch pod info: {e}", exc=e.__class__)
+  ssh_host, ssh_port = resolve_instance_ssh_endpoint(target_pod_id, args, verbose=verbose)
 
-  if not pod_info:
-    fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
-
-  ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
-  if not ssh_host or not ssh_port or ssh_port == "unknown":
-    fatal(f"Could not resolve SSH endpoint for pod '{target_pod_id}'. Is the pod running and exposing port 22?")
 
   priv_key = find_ssh_private_key(None, getattr(args, "ssh_private_key_path", None))
   wait_setup = not getattr(args, "no_wait_for_setup", False)
@@ -777,19 +854,8 @@ def cmd_run(args):
     fatal("No command specified. Usage: runpod-shell run [OPTIONS] <command> [args...]")
 
   verbose = getattr(args, "verbose", False)
-  if verbose:
-    print(f"Fetching connection details for pod '{target_pod_id}'...", file=sys.stderr)
-  try:
-    pod_info = runpod.get_pod(target_pod_id)
-  except Exception as e:
-    fatal(f"Failed to fetch pod info: {e}", exc=e.__class__)
+  ssh_host, ssh_port = resolve_instance_ssh_endpoint(target_pod_id, args, verbose=verbose)
 
-  if not pod_info:
-    fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
-
-  ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
-  if not ssh_host or not ssh_port or ssh_port == "unknown":
-    fatal(f"Could not resolve SSH endpoint for pod '{target_pod_id}'. Is the pod running and exposing port 22?")
 
   priv_key = find_ssh_private_key(None, getattr(args, "ssh_private_key_path", None))
   wait_setup = not getattr(args, "no_wait_for_setup", False)
@@ -864,17 +930,27 @@ def cmd_cp(args):
 
   if not getattr(args, "quiet", False):
     print(f"Fetching connection details for pod '{target_pod_id}'...")
-  try:
-    pod_info = runpod.get_pod(target_pod_id)
-  except Exception as e:
-    fatal(f"Failed to fetch pod info: {e}", exc=e.__class__)
+  provider = resolve_provider(args=args, instance_id=target_pod_id)
+  if provider.name == "runpod":
+    try:
+      pod_info = runpod.get_pod(target_pod_id)
+    except Exception as e:
+      fatal(f"Failed to fetch pod info: {e}", exc=e.__class__)
 
-  if not pod_info:
-    fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
+    if not pod_info:
+      fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
 
-  ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
+    ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
+  else:
+    try:
+      inst = provider.get_instance(target_pod_id)
+      ssh_host, ssh_port = inst.ssh_host, inst.ssh_port
+    except Exception as e:
+      fatal(f"Failed to fetch instance info: {e}", exc=e.__class__)
+
   if not ssh_host or not ssh_port or ssh_port == "unknown":
     fatal(f"Could not resolve SSH endpoint for pod '{target_pod_id}'. Is the pod running and exposing port 22?")
+
 
   priv_key = find_ssh_private_key(None, getattr(args, "ssh_private_key_path", None))
   ssh_cfg = resolve_ssh_config(getattr(args, "ssh_config", None))
@@ -915,17 +991,27 @@ def cmd_cp(args):
 def cmd_ps(args):
   target_pod_id = resolve_pod_id(args)
   print(f"Checking processes on pod '{target_pod_id}'...")
-  try:
-    pod_info = runpod.get_pod(target_pod_id)
-  except Exception as e:
-    fatal(f"Failed to fetch pod info: {e}", exc=e.__class__)
+  provider = resolve_provider(args=args, instance_id=target_pod_id)
+  if provider.name == "runpod":
+    try:
+      pod_info = runpod.get_pod(target_pod_id)
+    except Exception as e:
+      fatal(f"Failed to fetch pod info: {e}", exc=e.__class__)
 
-  if not pod_info:
-    fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
+    if not pod_info:
+      fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
 
-  ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
+    ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
+  else:
+    try:
+      inst = provider.get_instance(target_pod_id)
+      ssh_host, ssh_port = inst.ssh_host, inst.ssh_port
+    except Exception as e:
+      fatal(f"Failed to fetch instance info: {e}", exc=e.__class__)
+
   if not ssh_host or not ssh_port or ssh_port == "unknown":
     fatal(f"Could not resolve SSH endpoint for pod '{target_pod_id}'.")
+
 
   priv_key = find_ssh_private_key(None, getattr(args, "ssh_private_key_path", None))
   jobs = list_remote_jobs(
@@ -987,17 +1073,8 @@ def cmd_logs(args):
         "Please specify -p/--pod <pod_id>."
     )
 
-  try:
-    pod_info = runpod.get_pod(target_pod_id)
-  except Exception as e:
-    fatal(f"Failed to fetch pod info: {e}", exc=e.__class__)
-
-  if not pod_info:
-    fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
-
-  ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
-  if not ssh_host or not ssh_port or ssh_port == "unknown":
-    fatal(f"Could not resolve SSH endpoint for pod '{target_pod_id}'.")
+  verbose = getattr(args, "verbose", False)
+  ssh_host, ssh_port = resolve_instance_ssh_endpoint(target_pod_id, args, verbose=verbose)
 
   priv_key = find_ssh_private_key(None, getattr(args, "ssh_private_key_path", None))
   view_remote_logs(
@@ -1044,17 +1121,9 @@ def cmd_kill(args):
         "Please specify -p/--pod <pod_id>."
     )
 
-  try:
-    pod_info = runpod.get_pod(target_pod_id)
-  except Exception as e:
-    fatal(f"Failed to fetch pod info: {e}", exc=e.__class__)
+  verbose = getattr(args, "verbose", False)
+  ssh_host, ssh_port = resolve_instance_ssh_endpoint(target_pod_id, args, verbose=verbose)
 
-  if not pod_info:
-    fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
-
-  ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
-  if not ssh_host or not ssh_port or ssh_port == "unknown":
-    fatal(f"Could not resolve SSH endpoint for pod '{target_pod_id}'.")
 
   priv_key = find_ssh_private_key(None, getattr(args, "ssh_private_key_path", None))
   kill_remote_job(
@@ -1070,44 +1139,64 @@ def cmd_kill(args):
 
 
 def cmd_list(args):
-  print("Listing your RunPod instances...")
-  try:
-    pods = runpod.get_pods()
-  except Exception as e:
-    fatal(f"Failed to retrieve pods: {e}", exc=e.__class__)
+  provider = resolve_provider(args=args)
+  if provider.name == "runpod":
+    print("Listing your RunPod instances...")
+    try:
+      pods = runpod.get_pods()
+    except Exception as e:
+      fatal(f"Failed to retrieve pods: {e}", exc=e.__class__)
 
-  if not pods:
-    print("No pods found.")
-    return
+    if not pods:
+      print("No pods found.")
+      return
 
-  # Print a nice table
-  print(f"{'POD ID':<20} | {'NAME':<25} | {'STATUS':<12} | {'GPU TYPE':<22} | {'SSH ENDPOINT'}")
-  print("-" * 100)
-  for p in pods:
-    pod_id = p.get("id", "N/A")
-    name = p.get("name", "N/A")
-    status = p.get("desiredStatus") or p.get("status", "N/A")
+    # Print a nice table
+    print(f"{'POD ID':<20} | {'NAME':<25} | {'STATUS':<12} | {'GPU TYPE':<22} | {'SSH ENDPOINT'}")
+    print("-" * 100)
+    for p in pods:
+      pod_id = p.get("id", "N/A")
+      name = p.get("name", "N/A")
+      status = p.get("desiredStatus") or p.get("status", "N/A")
 
-    # Extract GPU info
-    machine_info = p.get("machine") or {}
-    gpu_type = (
-        machine_info.get("gpuDisplayName")
-        or p.get("gpuDisplayName")
-        or p.get("gpuName")
-        or p.get("gpuTypeId")
-        or "GPU"
-    )
-    gpu_count = p.get("gpuCount", 0)
-    if gpu_count > 0:
-      gpu_display = f"{gpu_count}x {gpu_type}"
-    else:
-      gpu_display = "CPU only"
+      # Extract GPU info
+      machine_info = p.get("machine") or {}
+      gpu_type = (
+          machine_info.get("gpuDisplayName")
+          or p.get("gpuDisplayName")
+          or p.get("gpuName")
+          or p.get("gpuTypeId")
+          or "GPU"
+      )
+      gpu_count = p.get("gpuCount", 0)
+      if gpu_count > 0:
+        gpu_display = f"{gpu_count}x {gpu_type}"
+      else:
+        gpu_display = "CPU only"
 
-    # Extract SSH endpoint
-    host, port = get_pod_ssh_endpoint(p)
-    ssh_endpoint = f"{host}:{port}" if host and port and port != "unknown" else "N/A"
+      # Extract SSH endpoint
+      host, port = get_pod_ssh_endpoint(p)
+      ssh_endpoint = f"{host}:{port}" if host and port and port != "unknown" else "N/A"
 
-    print(f"{pod_id:<20} | {name:<25} | {status:<12} | {gpu_display:<22} | {ssh_endpoint}")
+      print(f"{pod_id:<20} | {name:<25} | {status:<12} | {gpu_display:<22} | {ssh_endpoint}")
+  else:
+    print(f"Listing your {provider.name.capitalize()} instances...")
+    try:
+      instances = provider.list_instances()
+    except Exception as e:
+      fatal(f"Failed to retrieve instances: {e}", exc=e.__class__)
+
+    if not instances:
+      print("No instances found.")
+      return
+
+    print(f"{'INSTANCE ID':<20} | {'NAME':<25} | {'STATUS':<12} | {'GPU TYPE':<22} | {'SSH ENDPOINT'}")
+    print("-" * 100)
+    for inst in instances:
+      gpu_display = f"{inst.gpu_count}x {inst.gpu_name}" if inst.gpu_name else "N/A"
+      ssh_endpoint = f"{inst.ssh_host}:{inst.ssh_port}" if inst.ssh_host and inst.ssh_port else "N/A"
+      print(f"{inst.id:<20} | {inst.name:<25} | {inst.status:<12} | {gpu_display:<22} | {ssh_endpoint}")
+
 
 
 def run_graphql(query):
@@ -1355,9 +1444,13 @@ def cmd_info(args):
 
 def cmd_stop(args):
   target_pod_id = resolve_pod_id(args)
+  provider = resolve_provider(args=args, instance_id=target_pod_id)
   print(f"Stopping pod '{target_pod_id}'...")
   try:
-    runpod.stop_pod(target_pod_id)
+    if provider.name == "runpod":
+      runpod.stop_pod(target_pod_id)
+    else:
+      provider.stop_instance(target_pod_id)
     print(f"Stop request sent for pod '{target_pod_id}'.")
   except Exception as e:
     fatal(f"Failed to stop pod: {e}", exc=e.__class__)
@@ -1365,9 +1458,13 @@ def cmd_stop(args):
 
 def cmd_terminate(args):
   target_pod_id = resolve_pod_id(args)
+  provider = resolve_provider(args=args, instance_id=target_pod_id)
   print(f"Terminating pod '{target_pod_id}'...")
   try:
-    runpod.terminate_pod(target_pod_id)
+    if provider.name == "runpod":
+      runpod.terminate_pod(target_pod_id)
+    else:
+      provider.terminate_instance(target_pod_id)
     clear_last_pod_id_if_match(target_pod_id)
     print(f"Termination request sent for pod '{target_pod_id}'.")
   except Exception as e:
@@ -1375,10 +1472,33 @@ def cmd_terminate(args):
 
 
 def cmd_gpus(args):
+  provider = resolve_provider(args=args)
+  if provider.name == "vast":
+    print("Fetching available GPU types on Vast.ai...")
+    try:
+      filter_pattern = getattr(args, "regex_filter", None) or getattr(args, "filter", None)
+      gpus = provider.list_gpus(filter_pattern)
+    except Exception as e:
+      fatal(f"Failed to retrieve GPUs: {e}", exc=e.__class__)
+
+    if not gpus:
+      print("No GPUs found.")
+      return
+
+    print(f"{'GPU MODEL':<25} | {'VRAM':<10} | {'MIN PRICE':<12} | {'MAX PRICE':<12} | {'AVAILABLE'}")
+    print("-" * 80)
+    for g in gpus:
+      vram_str = f"{g['memoryInGb']} GB" if g.get("memoryInGb") else "N/A"
+      min_p = f"${g['minPrice']:.2f}/hr" if g.get("minPrice") is not None else "N/A"
+      max_p = f"${g['maxPrice']:.2f}/hr" if g.get("maxPrice") is not None else "N/A"
+      print(f"{g['displayName']:<25} | {vram_str:<10} | {min_p:<12} | {max_p:<12} | {g['count']} offers")
+    return
+
   print("Fetching available GPU types...")
   try:
     query = """
     query GpuTypes {
+
       gpuTypes {
         id
         displayName
@@ -1513,27 +1633,43 @@ def cmd_templates(args):
 
 def main(args=None):
   parser = argparse.ArgumentParser(
-      prog="runpod-shell",
-      description="Manage RunPod instances with optional persistent volume and custom environment setup."
+      prog="xpu-shell",
+      description="Manage AI accelerator instances (RunPod, Vast.ai, etc.) with remote execution and job supervision."
   )
   parser.add_argument(
       "--api-key",
-      help="RunPod API Key (can also be set via RUNPOD_API_KEY environment variable)"
+      help="API Key (can also be set via RUNPOD_API_KEY or VAST_API_KEY environment variable)"
+  )
+  parser.add_argument(
+      "--provider",
+      help="Target provider ('runpod' or 'vast'). Default: auto-detect or runpod.",
+      default=None
   )
 
   subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommands")
 
   # Create Command
-  create_parser = subparsers.add_parser("create", help="Create and launch a new RunPod instance")
+  create_parser = subparsers.add_parser("create", help="Create and launch a new instance")
+  create_parser.add_argument(
+      "--provider",
+      help="Target provider ('runpod' or 'vast'). Default: auto-detect or runpod.",
+      default=None
+  )
+  create_parser.add_argument(
+      "--offer-id",
+      type=int,
+      help="Direct Vast.ai offer/ask ID to rent (optional for Vast.ai)."
+  )
   create_parser.add_argument(
       "--name",
       default="persistent-worker",
-      help="Name of the RunPod instance (default: %(default)s)"
+      help="Name of the instance (default: %(default)s)"
   )
   create_parser.add_argument(
       "--volume-id",
       help="Network volume ID to attach (optional)"
   )
+
   create_parser.add_argument(
       "--image-name",
       "--image_name",
@@ -2141,16 +2277,23 @@ def main(args=None):
   raw_args = preprocess_argv(raw_args)
   args = parser.parse_args(raw_args)
 
-  # Set API Key
+  # Set API Key and resolve provider
+  target_id = getattr(args, "pod", None) or getattr(args, "pod_id", None)
+  provider = resolve_provider(args=args, instance_id=target_id)
+
   if args.api_key:
-    runpod.api_key = args.api_key
+    if provider.name == "vast":
+      os.environ["VAST_API_KEY"] = args.api_key
+    else:
+      runpod.api_key = args.api_key
   elif not runpod.api_key:
     runpod.api_key = os.environ.get("RUNPOD_API_KEY")
 
-  if not runpod.api_key:
+  if provider.name == "runpod" and not runpod.api_key:
     parser.error(
         "RunPod API key must be provided via --api-key or the RUNPOD_API_KEY environment variable."
     )
+
 
   if args.command == "create":
     cmd_create(args)

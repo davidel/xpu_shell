@@ -7,7 +7,7 @@ import sys
 import unittest
 from unittest.mock import patch, MagicMock
 
-import runpod_shell.ssh_runner as ssh_runner
+import xpu_shell.ssh_runner as ssh_runner
 
 
 class TestSSHRunner(unittest.TestCase):
@@ -85,8 +85,8 @@ class TestSSHRunner(unittest.TestCase):
     self.assertTrue(res)
 
   @patch("pathlib.Path.exists", autospec=True)
-  @patch("runpod_shell.ssh_runner.wait_for_ssh")
-  @patch("runpod_shell.ssh_runner.wait_for_setup")
+  @patch("xpu_shell.ssh_runner.wait_for_ssh")
+  @patch("xpu_shell.ssh_runner.wait_for_setup")
   @patch("subprocess.run")
   def test_execute_remote_script_detach(self, mock_run, mock_wait_setup, mock_wait_ssh, mock_exists):
     mock_exists.return_value = True
@@ -119,8 +119,8 @@ class TestSSHRunner(unittest.TestCase):
     self.assertIn("--args", launch_script)
 
   @patch("pathlib.Path.exists", autospec=True)
-  @patch("runpod_shell.ssh_runner.wait_for_ssh")
-  @patch("runpod_shell.ssh_runner.wait_for_setup")
+  @patch("xpu_shell.ssh_runner.wait_for_ssh")
+  @patch("xpu_shell.ssh_runner.wait_for_setup")
   @patch("subprocess.run")
   def test_execute_remote_script_foreground(self, mock_run, mock_wait_setup, mock_wait_ssh, mock_exists):
     mock_exists.return_value = True
@@ -165,7 +165,7 @@ class TestSSHRunner(unittest.TestCase):
     self.assertEqual(len(jobs), 1)
     self.assertEqual(jobs[0]["job_id"], "job-1")
 
-  @patch("runpod_shell.ssh_runner.list_remote_jobs")
+  @patch("xpu_shell.ssh_runner.list_remote_jobs")
   @patch("subprocess.run")
   def test_view_remote_logs_follow(self, mock_run, mock_list):
     mock_list.return_value = [
@@ -179,7 +179,7 @@ class TestSSHRunner(unittest.TestCase):
     self.assertIn("--pid=1234", remote_cmd)
     self.assertIn("trap", remote_cmd)
 
-  @patch("runpod_shell.ssh_runner.list_remote_jobs")
+  @patch("xpu_shell.ssh_runner.list_remote_jobs")
   @patch("subprocess.run")
   def test_view_remote_logs_follow_completed(self, mock_run, mock_list):
     mock_list.return_value = [
@@ -192,7 +192,7 @@ class TestSSHRunner(unittest.TestCase):
     self.assertNotIn("-f", remote_cmd)
     self.assertIn("tail -n 50 '/workspace/logs/job-1.log'", remote_cmd)
 
-  @patch("runpod_shell.ssh_runner.list_remote_jobs")
+  @patch("xpu_shell.ssh_runner.list_remote_jobs")
   @patch("subprocess.run")
   def test_view_remote_logs_keyboard_interrupt(self, mock_run, mock_list):
     mock_list.return_value = [
@@ -203,7 +203,7 @@ class TestSSHRunner(unittest.TestCase):
     ssh_runner.view_remote_logs("1.2.3.4", 22, job_id="job-1", follow=True)
     mock_run.assert_called_once()
 
-  @patch("runpod_shell.ssh_runner.list_remote_jobs")
+  @patch("xpu_shell.ssh_runner.list_remote_jobs")
   @patch("subprocess.run")
   def test_view_remote_logs_shorthand_id(self, mock_run, mock_list):
     mock_list.return_value = [
@@ -310,8 +310,8 @@ class TestSSHRunner(unittest.TestCase):
     self.assertEqual(cmd[idx + 1], "/dev/null")
 
   @patch("pathlib.Path.exists", autospec=True)
-  @patch("runpod_shell.ssh_runner.wait_for_ssh")
-  @patch("runpod_shell.ssh_runner.wait_for_setup")
+  @patch("xpu_shell.ssh_runner.wait_for_ssh")
+  @patch("xpu_shell.ssh_runner.wait_for_setup")
   @patch("subprocess.run")
   def test_execute_remote_script_with_extra_env(self, mock_run, mock_wait_setup, mock_wait_ssh, mock_exists):
     import base64
@@ -341,7 +341,7 @@ class TestSSHRunner(unittest.TestCase):
 
   def test_runner_unpacks_job_env(self):
     import base64
-    import runpod_shell.runner as runner
+    import xpu_shell.runner as runner
     env_payload = {"MY_SECRET": "abc123xyz"}
     b64_payload = base64.b64encode(json.dumps(env_payload).encode("utf-8")).decode("ascii")
 
@@ -354,8 +354,8 @@ class TestSSHRunner(unittest.TestCase):
       self.assertEqual(env.get("MY_SECRET"), "abc123xyz")
       self.assertNotIn("RUNPOD_JOB_ENV", env)
 
-  @patch("runpod_shell.ssh_runner.wait_for_ssh")
-  @patch("runpod_shell.ssh_runner.wait_for_setup")
+  @patch("xpu_shell.ssh_runner.wait_for_ssh")
+  @patch("xpu_shell.ssh_runner.wait_for_setup")
   @patch("subprocess.run")
   def test_execute_remote_command_detach(self, mock_run, mock_wait_setup, mock_wait_ssh):
     # 1. scp runner.py
@@ -380,8 +380,8 @@ class TestSSHRunner(unittest.TestCase):
     mock_wait_ssh.assert_called_once()
     mock_wait_setup.assert_called_once()
 
-  @patch("runpod_shell.ssh_runner.wait_for_ssh")
-  @patch("runpod_shell.ssh_runner.wait_for_setup")
+  @patch("xpu_shell.ssh_runner.wait_for_ssh")
+  @patch("xpu_shell.ssh_runner.wait_for_setup")
   @patch("subprocess.run")
   def test_execute_remote_command_foreground(self, mock_run, mock_wait_setup, mock_wait_ssh):
     # 1. scp runner.py
@@ -430,8 +430,8 @@ class TestSSHRunner(unittest.TestCase):
     self.assertEqual(cmd[-2], "root@1.2.3.4:/workspace/file.txt")
     self.assertEqual(cmd[-1], "./file.txt")
 
-  @patch("runpod_shell.ssh_runner.wait_for_ssh")
-  @patch("runpod_shell.ssh_runner.wait_for_setup")
+  @patch("xpu_shell.ssh_runner.wait_for_ssh")
+  @patch("xpu_shell.ssh_runner.wait_for_setup")
   @patch("subprocess.run")
   def test_execute_remote_command_with_shell(self, mock_run, mock_wait_setup, mock_wait_ssh):
     mock_run.side_effect = [
