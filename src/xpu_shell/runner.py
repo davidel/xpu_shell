@@ -690,7 +690,7 @@ def cmd_kill(args):
 
 
 def main():
-  parser = argparse.ArgumentParser(description="RunPod Remote Job Runner")
+  parser = argparse.ArgumentParser(description="XPU Remote Job Runner")
   subparsers = parser.add_subparsers(dest="command", required=True)
 
   run_p = subparsers.add_parser("run")

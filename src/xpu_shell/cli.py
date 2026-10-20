@@ -1829,7 +1829,7 @@ def main(args=None):
   )
 
   # Exec Command
-  exec_parser = subparsers.add_parser("exec", help="Execute a local script on an active RunPod instance via SSH")
+  exec_parser = subparsers.add_parser("exec", help="Execute a local script on an active XPU instance via SSH")
   exec_parser.add_argument(
       "-p",
       "--pod",
@@ -1910,7 +1910,7 @@ def main(args=None):
   )
 
   # Run Command
-  run_parser = subparsers.add_parser("run", help="Run a command directly (binary + args) on an active RunPod instance via SSH")
+  run_parser = subparsers.add_parser("run", help="Run a command directly (binary + args) on an active XPU instance via SSH")
   run_parser.add_argument(
       "-p",
       "--pod",
@@ -1987,7 +1987,7 @@ def main(args=None):
   )
 
   # Cp Command
-  cp_parser = subparsers.add_parser("cp", help="Copy files or directories between a local path and a RunPod instance via SCP")
+  cp_parser = subparsers.add_parser("cp", help="Copy files or directories between a local path and an XPU instance via SCP")
   cp_parser.add_argument(
       "-p",
       "--pod",
@@ -2035,7 +2035,7 @@ def main(args=None):
   )
 
   # Ps Command
-  ps_parser = subparsers.add_parser("ps", help="List remote processes and managed jobs on a RunPod instance")
+  ps_parser = subparsers.add_parser("ps", help="List remote processes and managed jobs on an XPU instance")
   ps_parser.add_argument(
       "-p",
       "--pod",
@@ -2062,7 +2062,7 @@ def main(args=None):
   )
 
   # Logs Command
-  logs_parser = subparsers.add_parser("logs", help="View remote logs of managed jobs on a RunPod instance")
+  logs_parser = subparsers.add_parser("logs", help="View remote logs of managed jobs on an XPU instance")
   logs_parser.add_argument(
       "-p",
       "--pod",
@@ -2125,7 +2125,7 @@ def main(args=None):
   )
 
   # Kill Command
-  kill_parser = subparsers.add_parser("kill", help="Kill a remote job or process on a RunPod instance")
+  kill_parser = subparsers.add_parser("kill", help="Kill a remote job or process on an XPU instance")
   kill_parser.add_argument(
       "-p",
       "--pod",
@@ -2180,10 +2180,10 @@ def main(args=None):
   )
 
   # List Command
-  subparsers.add_parser("list", help="List all your RunPod instances")
+  subparsers.add_parser("list", help="List all your XPU instances")
 
   # Info Command
-  info_parser = subparsers.add_parser("info", help="Show detailed information about a RunPod instance")
+  info_parser = subparsers.add_parser("info", help="Show detailed information about an XPU instance")
   info_parser.add_argument(
       "-p",
       "--pod",
@@ -2206,7 +2206,7 @@ def main(args=None):
   )
 
   # Stop Command
-  stop_parser = subparsers.add_parser("stop", help="Stop a running RunPod instance")
+  stop_parser = subparsers.add_parser("stop", help="Stop a running XPU instance")
   stop_parser.add_argument(
       "-p",
       "--pod",
@@ -2222,7 +2222,7 @@ def main(args=None):
   )
 
   # Terminate Command
-  terminate_parser = subparsers.add_parser("terminate", help="Terminate (delete) a RunPod instance")
+  terminate_parser = subparsers.add_parser("terminate", help="Terminate (delete) an XPU instance")
   terminate_parser.add_argument(
       "-p",
       "--pod",
@@ -2238,7 +2238,7 @@ def main(args=None):
   )
 
   # Gpus Command
-  gpus_parser = subparsers.add_parser("gpus", help="List all available GPU types and details on RunPod")
+  gpus_parser = subparsers.add_parser("gpus", help="List all available GPU types and details on XPU")
   gpus_parser.add_argument(
       "filter",
       nargs="?",
