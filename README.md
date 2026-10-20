@@ -207,7 +207,7 @@ xpush terminate --pod <pod-id>
 ---
 
 ### 7. `gpus`
-Retrieves and lists all available GPU models, including display names, VRAM sizes, maximum GPU configurations, and hourly pricing (Secure vs. Community cloud). Supports optional regex filtering on GPU ID or Display Name (case-insensitive).
+Retrieves and lists available GPU models, including display names, VRAM sizes, maximum GPU configurations, and hourly pricing. Supports optional regex filtering on GPU ID or Display Name (case-insensitive), as well as `-l` / `--expand` to inspect individual marketplace offerings (with Offer IDs, reliability, download/upload speeds, disk space, and location on Vast.ai).
 
 ```bash
 # List all GPUs
@@ -217,12 +217,16 @@ xpush gpus
 xpush gpus 4090
 xpush gpus "A100|H100"
 xpush gpus -r "RTX 40\d0"
+
+# Expand individual marketplace offerings on Vast.ai (shows Offer ID, reliability, speeds, etc.)
+xpush gpus --provider vast 4090 -l
 ```
 
 | Argument / Flag | Default | Description |
 |---|---|---|
 | `filter` | *None* | Optional regex pattern to filter GPUs by ID or Display Name (case-insensitive) |
 | `-r`, `--regex`, `--filter` | *None* | Optional regex pattern to filter GPUs by ID or Display Name (case-insensitive) |
+| `-l`, `--expand` | `False` | Expand list to show individual marketplace offerings (e.g. for Vast.ai) |
 
 ---
 

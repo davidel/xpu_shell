@@ -257,8 +257,17 @@ class VastProvider(BaseProvider):
   def terminate_instance(self, instance_id: str) -> None:
     self._request("DELETE", f"/instances/{instance_id}/")
 
-  def list_gpus(self, filter_pattern: Optional[str] = None) -> List[Dict[str, Any]]:
+  def list_gpus(self, filter_pattern: Optional[str] = None, expand: bool = False) -> List[Dict[str, Any]]:
     offers = self.search_offers(min_reliability=0.5)
+    if expand:
+      if filter_pattern:
+        regex = re.compile(filter_pattern, re.IGNORECASE)
+        offers = [
+            o for o in offers
+            if regex.search(str(o.get("gpu_name") or "")) or regex.search(str(o.get("id") or ""))
+        ]
+      return offers
+
     gpu_aggregates: Dict[str, Dict[str, Any]] = {}
 
     for o in offers:

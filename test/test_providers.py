@@ -324,3 +324,74 @@ class TestVastCLIIntegration(unittest.TestCase):
     self.assertIn("$0.29/hr", output)
     self.assertIn("12 offers", output)
 
+  @patch("xpu_shell.cli.resolve_provider")
+  @patch("sys.stdout")
+  def test_vast_cli_gpus_expand(self, mock_stdout, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "vast"
+    mock_prov.list_gpus.return_value = [
+        {
+            "id": 9992,
+            "gpu_name": "RTX 4090",
+            "num_gpus": 1,
+            "gpu_ram": 24576,
+            "dph_total": 0.345,
+            "reliability2": 0.992,
+            "inet_down": 1200.0,
+            "inet_up": 800.0,
+            "disk_space": 150.0,
+            "geolocation": "US"
+        }
+    ]
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "gpus", "-l", "4090"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_prov.list_gpus.assert_called_with("4090", expand=True)
+    calls = [call[0][0] for call in mock_stdout.write.call_args_list if call[0]]
+    output = "".join(calls)
+    self.assertIn("OFFER ID", output)
+    self.assertIn("9992", output)
+    self.assertIn("RTX 4090", output)
+    self.assertIn("$0.345/hr", output)
+    self.assertIn("99.2%", output)
+    self.assertIn("1200/800 Mbps", output)
+    self.assertIn("150 GB", output)
+    self.assertIn("US", output)
+
+  @patch("requests.Session.request")
+  def test_vast_provider_list_gpus_expand(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{"offers": []}'
+    mock_resp.json.return_value = {
+        "offers": [
+            {
+                "id": 1111,
+                "gpu_name": "RTX 4090",
+                "num_gpus": 1,
+                "rented": False,
+                "reliability2": 0.98,
+                "dph_total": 0.40,
+                "disk_space": 100.0
+            },
+            {
+                "id": 2222,
+                "gpu_name": "RTX 3090",
+                "num_gpus": 1,
+                "rented": False,
+                "reliability2": 0.95,
+                "dph_total": 0.20,
+                "disk_space": 50.0
+            }
+        ]
+    }
+    mock_req.return_value = mock_resp
+
+    vast = VastProvider(api_key="fake-key")
+    offers = vast.list_gpus("4090", expand=True)
+    self.assertEqual(len(offers), 1)
+    self.assertEqual(offers[0]["id"], 1111)
+

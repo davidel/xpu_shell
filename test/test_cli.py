@@ -287,6 +287,20 @@ class TestRunPodShellCLI(unittest.TestCase):
       with self.assertRaises(ValueError):
         cli.main()
 
+  @patch("runpod.get_gpus")
+  @patch("sys.stdout")
+  def test_gpus_command_expand_runpod(self, mock_stdout, mock_get_gpus):
+    mock_get_gpus.return_value = [
+        {"id": "RTX 4090", "displayName": "RTX 4090", "memoryInGb": 24}
+    ]
+    test_args = ["cli.py", "gpus", "-l"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+    calls = [call[0][0] for call in mock_stdout.write.call_args_list if call[0]]
+    output = "".join(calls)
+    self.assertIn("Note: RunPod allocates pooled GPU capacity", output)
+    self.assertIn("RTX 4090", output)
+
   @patch("subprocess.run")
   @patch("xpu_shell.cli.wait_for_ssh")
   @patch("xpu_shell.cli.execute_remote_script")

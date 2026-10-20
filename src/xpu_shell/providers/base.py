@@ -58,5 +58,5 @@ class BaseProvider(ABC):
     pass
 
   @abstractmethod
-  def list_gpus(self, filter_pattern: Optional[str] = None) -> List[Dict[str, Any]]:
+  def list_gpus(self, filter_pattern: Optional[str] = None, expand: bool = False) -> List[Dict[str, Any]]:
     pass

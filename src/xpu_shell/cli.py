@@ -1473,16 +1473,52 @@ def cmd_terminate(args):
 
 def cmd_gpus(args):
   provider = resolve_provider(args=args)
+  filter_pattern = getattr(args, "regex_filter", None) or getattr(args, "filter", None)
+  if filter_pattern:
+    try:
+      re.compile(filter_pattern, re.IGNORECASE)
+    except re.error as e:
+      fatal(f"Invalid regex pattern '{filter_pattern}': {e}", ValueError)
+
+  expand = getattr(args, "expand", False)
   if provider.name == "vast":
     print("Fetching available GPU types on Vast.ai...")
     try:
-      filter_pattern = getattr(args, "regex_filter", None) or getattr(args, "filter", None)
-      gpus = provider.list_gpus(filter_pattern)
+      gpus = provider.list_gpus(filter_pattern, expand=expand)
     except Exception as e:
       fatal(f"Failed to retrieve GPUs: {e}", exc=e.__class__)
 
     if not gpus:
-      print("No GPUs found.")
+      if filter_pattern:
+        print(f"No GPUs matching pattern '{filter_pattern}' found.")
+      else:
+        print("No GPUs found.")
+      return
+
+    if expand:
+      print(f"{'OFFER ID':<10} | {'GPU MODEL':<20} | {'GPUS':<5} | {'VRAM':<8} | {'PRICE':<10} | {'RELIABILITY':<12} | {'INET (DOWN/UP)':<18} | {'DISK':<9} | {'LOCATION'}")
+      print("-" * 115)
+      for o in gpus:
+        offer_id = str(o.get("id", "N/A"))
+        gpu_name = str(o.get("gpu_name") or o.get("displayName") or "Unknown")
+        num_gpus = f"{o.get('num_gpus', 1)}x"
+        vram = o.get("gpu_ram") or (o.get("memoryInGb") * 1024 if o.get("memoryInGb") else 0)
+        vram_gb = vram // 1024 if vram > 128 else vram
+        vram_str = f"{vram_gb} GB" if vram_gb else "N/A"
+        dph = o.get("dph_total") if o.get("dph_total") is not None else o.get("minPrice")
+        price_str = f"${dph:.3f}/hr" if isinstance(dph, (int, float)) else "N/A"
+        rel = o.get("reliability2")
+        rel_str = f"{rel * 100:.1f}%" if isinstance(rel, (int, float)) else "N/A"
+        down = o.get("inet_down")
+        up = o.get("inet_up")
+        if down is not None and up is not None:
+          inet_str = f"{int(down)}/{int(up)} Mbps"
+        else:
+          inet_str = "N/A"
+        disk = o.get("disk_space")
+        disk_str = f"{int(disk)} GB" if disk else "N/A"
+        loc = o.get("geolocation") or o.get("country") or "N/A"
+        print(f"{offer_id:<10} | {gpu_name:<20} | {num_gpus:<5} | {vram_str:<8} | {price_str:<10} | {rel_str:<12} | {inet_str:<18} | {disk_str:<9} | {loc}")
       return
 
     print(f"{'GPU MODEL':<25} | {'VRAM':<10} | {'MIN PRICE':<12} | {'MAX PRICE':<12} | {'AVAILABLE'}")
@@ -1521,13 +1557,8 @@ def cmd_gpus(args):
     print("No GPUs found.")
     return
 
-  filter_pattern = getattr(args, "regex_filter", None) or getattr(args, "filter", None)
   if filter_pattern:
-    try:
-      regex = re.compile(filter_pattern, re.IGNORECASE)
-    except re.error as e:
-      fatal(f"Invalid regex pattern '{filter_pattern}': {e}", ValueError)
-
+    regex = re.compile(filter_pattern, re.IGNORECASE)
     gpus = [
         g for g in gpus
         if regex.search(g.get("id") or "") or regex.search(g.get("displayName") or "")
@@ -1536,6 +1567,9 @@ def cmd_gpus(args):
     if not gpus:
       print(f"No GPUs matching pattern '{filter_pattern}' found.")
       return
+
+  if expand:
+    print("Note: RunPod allocates pooled GPU capacity rather than individual marketplace offers. Use --cloud-type (SECURE/COMMUNITY) when launching.\n")
 
   print(f"{'GPU ID':<30} | {'DISPLAY NAME':<25} | {'VRAM (GB)':<9} | {'MAX':<3} | {'SECURE':<7} | {'COMMUNITY':<9}")
   print("-" * 98)
@@ -2252,6 +2286,14 @@ def main(args=None):
       dest="regex_filter",
       default=None,
       help="Optional regex pattern to filter GPUs by ID or Display Name (case-insensitive)"
+  )
+  gpus_parser.add_argument(
+      "-l",
+      "--expand",
+      action="store_true",
+      dest="expand",
+      default=False,
+      help="Expand list to show individual marketplace offerings (e.g. for Vast.ai)"
   )
 
   # Templates Command

@@ -106,7 +106,7 @@ class RunPodProvider(BaseProvider):
   def terminate_instance(self, instance_id: str) -> None:
     runpod.terminate_pod(instance_id)
 
-  def list_gpus(self, filter_pattern: Optional[str] = None) -> List[Dict[str, Any]]:
+  def list_gpus(self, filter_pattern: Optional[str] = None, expand: bool = False) -> List[Dict[str, Any]]:
     gpus = runpod.get_gpus() or []
     if filter_pattern:
       regex = re.compile(filter_pattern, re.IGNORECASE)
