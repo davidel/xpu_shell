@@ -395,3 +395,61 @@ class TestVastCLIIntegration(unittest.TestCase):
     self.assertEqual(len(offers), 1)
     self.assertEqual(offers[0]["id"], 1111)
 
+  def test_runpod_rejects_offer_id(self):
+    test_args = ["cli.py", "create", "--provider", "runpod", "--offer-id", "12345"]
+    with patch.object(sys, "argv", test_args):
+      with patch("sys.stderr"):
+        with self.assertRaises(SystemExit) as ctx:
+          cli.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+  def test_vast_rejects_template_id(self):
+    test_args = ["cli.py", "create", "--provider", "vast", "--template-id", "runpod-pytorch"]
+    with patch.object(sys, "argv", test_args):
+      with patch("sys.stderr"):
+        with self.assertRaises(SystemExit) as ctx:
+          cli.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+  def test_vast_rejects_cloud_type(self):
+    test_args = ["cli.py", "create", "--provider", "vast", "--cloud-type", "COMMUNITY"]
+    with patch.object(sys, "argv", test_args):
+      with patch("sys.stderr"):
+        with self.assertRaises(SystemExit) as ctx:
+          cli.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+  def test_vast_rejects_templates_subcommand(self):
+    test_args = ["cli.py", "--provider", "vast", "templates"]
+    with patch.object(sys, "argv", test_args):
+      with patch("sys.stderr"):
+        with self.assertRaises(SystemExit) as ctx:
+          cli.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+  @patch("xpu_shell.providers.vast_provider.VastProvider.create_instance")
+  @patch("xpu_shell.providers.vast_provider.VastProvider.get_instance")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("xpu_shell.cli.get_ssh_key")
+  @patch("time.sleep")
+  def test_create_with_offer_id_auto_detects_vast(self, mock_sleep, mock_ssh_key, mock_find_priv, mock_wait_ssh, mock_get_inst, mock_create_inst):
+    mock_ssh_key.return_value = "ssh-rsa fake_public_key"
+    fake_inst = Instance(
+        id="12345",
+        name="test-worker",
+        provider="vast",
+        status="RUNNING",
+        ssh_host="ssh.vast.ai",
+        ssh_port=2222
+    )
+    mock_create_inst.return_value = fake_inst
+    mock_get_inst.return_value = fake_inst
+
+    test_args = ["cli.py", "create", "--offer-id", "9999", "--image-name", "pytorch/pytorch:latest"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_create_inst.assert_called_once()
+    self.assertEqual(mock_create_inst.call_args[1]["offer_id"], 9999)
+

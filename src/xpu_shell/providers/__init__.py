@@ -12,7 +12,7 @@ LAST_PROVIDER_FILE = CONFIG_DIR / ".last_provider"
 
 
 def get_last_provider_file() -> Path:
-  custom_dir = os.environ.get("XPU_SHELL_CONFIG_DIR")
+  custom_dir = os.environ.get("XPU_SHELL_CONFIG_DIR") or os.environ.get("RUNPOD_SHELL_CONFIG_DIR")
   if custom_dir:
     return Path(custom_dir) / ".last_provider"
   return LAST_PROVIDER_FILE
@@ -67,6 +67,11 @@ def resolve_provider(args=None, instance_id: Optional[str] = None) -> BaseProvid
   if cli_provider:
     api_key = getattr(args, "api_key", None) if args else None
     return get_provider(cli_provider, api_key=api_key)
+
+  # 2. Vast.ai specific offer ID
+  if getattr(args, "offer_id", None) is not None:
+    api_key = getattr(args, "api_key", None) if args else None
+    return get_provider("vast", api_key=api_key)
 
   # 2. Prefixed instance identifier e.g. "vast:12345"
   if instance_id:

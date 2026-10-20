@@ -29,6 +29,14 @@ class BaseProvider(ABC):
   def name(self) -> str:
     pass
 
+  def register_create_args(self, parser: Any) -> None:
+    """Register provider-specific CLI arguments for the create command."""
+    pass
+
+  def register_commands(self, subparsers: Any) -> None:
+    """Register provider-specific subcommands."""
+    pass
+
   @abstractmethod
   def list_instances(self) -> List[Instance]:
     pass

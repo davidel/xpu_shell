@@ -19,7 +19,10 @@ class TestRunPodShellCLI(unittest.TestCase):
 
   def setUp(self):
     self._temp_dir = tempfile.TemporaryDirectory()
-    self._env_patcher = patch.dict(os.environ, {"RUNPOD_SHELL_CONFIG_DIR": self._temp_dir.name})
+    self._env_patcher = patch.dict(os.environ, {
+        "XPU_SHELL_CONFIG_DIR": self._temp_dir.name,
+        "RUNPOD_SHELL_CONFIG_DIR": self._temp_dir.name
+    })
     self._env_patcher.start()
 
   def tearDown(self):

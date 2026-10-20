@@ -23,10 +23,12 @@ from xpu_shell.ssh_runner import (
     build_cp_cmd
 )
 from xpu_shell.providers import (
+    BaseProvider,
     get_provider,
     resolve_provider,
     save_last_provider,
-    get_last_provider
+    get_last_provider,
+    parse_instance_identifier
 )
 
 
@@ -62,7 +64,7 @@ LAST_JOB_ID_FILE = CONFIG_DIR / ".last_job_id"
 
 
 def get_config_dir():
-  custom_dir = os.environ.get("XPU_SHELL_CONFIG_DIR")
+  custom_dir = os.environ.get("XPU_SHELL_CONFIG_DIR") or os.environ.get("RUNPOD_SHELL_CONFIG_DIR")
   if custom_dir:
     return Path(custom_dir)
   return CONFIG_DIR
@@ -72,7 +74,7 @@ def get_last_pod_id_file():
   custom_file = os.environ.get("XPU_SHELL_LAST_POD_ID_FILE")
   if custom_file:
     return Path(custom_file)
-  if "XPU_SHELL_CONFIG_DIR" in os.environ:
+  if "XPU_SHELL_CONFIG_DIR" in os.environ or "RUNPOD_SHELL_CONFIG_DIR" in os.environ:
     return get_config_dir() / ".last_pod_id"
   return LAST_POD_ID_FILE
 
@@ -588,13 +590,16 @@ def cmd_create(args):
   container_env.update(args.env)
   container_env["PUBLIC_KEY"] = ssh_public_key
 
+  provider = resolve_provider(args=args)
   # Check image_name and template_id
   template_id = getattr(args, "template_id", None)
   image_name = getattr(args, "image_name", None)
   if not template_id and not image_name:
-    fatal("Either --template-id or --image-name must be specified.", ValueError)
+    if provider.name == "vast":
+      image_name = "pytorch/pytorch:latest"
+    else:
+      fatal("Either --template-id or --image-name must be specified.", ValueError)
 
-  provider = resolve_provider(args=args)
   if provider.name == "vast":
     print(f"Launching Vast.ai instance '{args.name}'...")
     try:
@@ -1666,6 +1671,30 @@ def cmd_templates(args):
 
 
 def main(args=None):
+  if args is not None and args and (args[0].endswith(".py") or args[0] in ("runpod-shell", "cli.py")):
+    args = args[1:]
+  raw_args = list(args) if args is not None else sys.argv[1:]
+  raw_args = preprocess_argv(raw_args)
+
+  # Pass 1: Early provider resolution
+  pre_parser = argparse.ArgumentParser(add_help=False)
+  pre_parser.add_argument("--provider", default=None)
+  pre_parser.add_argument("--offer-id", type=int, default=None)
+  pre_parser.add_argument("-p", "--pod", default=None)
+  pre_parser.add_argument("--api-key", default=None)
+  pre_args, remaining_args = pre_parser.parse_known_args(raw_args)
+
+  target_id = pre_args.pod
+  if not target_id and remaining_args:
+    for token in remaining_args:
+      if not token.startswith("-"):
+        prov, _ = parse_instance_identifier(token)
+        if prov or (token.isdigit() and len(token) >= 4):
+          target_id = token
+          break
+
+  provider = resolve_provider(args=pre_args, instance_id=target_id)
+
   parser = argparse.ArgumentParser(
       prog="xpu-shell",
       description="Manage AI accelerator instances (RunPod, Vast.ai, etc.) with remote execution and job supervision."
@@ -1690,33 +1719,16 @@ def main(args=None):
       default=None
   )
   create_parser.add_argument(
-      "--offer-id",
-      type=int,
-      help="Direct Vast.ai offer/ask ID to rent (optional for Vast.ai)."
-  )
-  create_parser.add_argument(
       "--name",
       default="persistent-worker",
       help="Name of the instance (default: %(default)s)"
   )
   create_parser.add_argument(
-      "--volume-id",
-      help="Network volume ID to attach (optional)"
-  )
-
-  create_parser.add_argument(
       "--image-name",
       "--image_name",
       dest="image_name",
       default=None,
-      help="Base image name (optional if --template-id is specified)"
-  )
-  create_parser.add_argument(
-      "--template-id",
-      "--template_id",
-      dest="template_id",
-      default=None,
-      help="RunPod template ID (takes precedence over --image-name)"
+      help="Base image name"
   )
   create_parser.add_argument(
       "--gpu-type",
@@ -1769,24 +1781,6 @@ def main(args=None):
       help="Path to a .env file containing environment variables to set in the container"
   )
   create_parser.add_argument(
-      "--ports",
-      default="22/tcp",
-      help="Container ports to expose (default: %(default)s)"
-  )
-  create_parser.add_argument(
-      "--docker-args",
-      "--docker_args",
-      dest="docker_args",
-      default=None,
-      help="Custom docker arguments to override container entrypoint (optional)"
-  )
-  create_parser.add_argument(
-      "--cloud-type",
-      choices=["SECURE", "COMMUNITY", "ALL"],
-      default="SECURE",
-      help="Type of cloud network to deploy the pod on (default: %(default)s)"
-  )
-  create_parser.add_argument(
       "--gpu-count",
       type=int,
       default=1,
@@ -1804,20 +1798,6 @@ def main(args=None):
       default="/workspace",
       dest="volume_mount_path",
       help="Path inside the container where the volume is mounted (default: %(default)s)"
-  )
-  create_parser.add_argument(
-      "--vcpu-count",
-      "--vcpu_count",
-      type=int,
-      default=4,
-      dest="vcpu_count",
-      help="Minimum number of vCPUs to allocate (default: %(default)s)"
-  )
-  create_parser.add_argument(
-      "--memory",
-      type=int,
-      default=8,
-      help="Minimum CPU RAM in GB to allocate (default: %(default)s)"
   )
   create_parser.add_argument(
       "--run-script",
@@ -1861,6 +1841,26 @@ def main(args=None):
       default=180,
       help="Max seconds to wait for SSH and setup readiness (default: %(default)s)"
   )
+
+  # Register provider-specific create arguments and subcommands
+  if isinstance(provider, BaseProvider):
+    provider.register_create_args(create_parser)
+    provider.register_commands(subparsers)
+  else:
+    prov_name = getattr(provider, "name", "runpod")
+    real_prov = get_provider(prov_name)
+    real_prov.register_create_args(create_parser)
+    real_prov.register_commands(subparsers)
+    if hasattr(provider, "register_create_args"):
+      try:
+        provider.register_create_args(create_parser)
+      except Exception:
+        pass
+    if hasattr(provider, "register_commands"):
+      try:
+        provider.register_commands(subparsers)
+      except Exception:
+        pass
 
   # Exec Command
   exec_parser = subparsers.add_parser("exec", help="Execute a local script on an active XPU instance via SSH")
@@ -2296,31 +2296,10 @@ def main(args=None):
       help="Expand list to show individual marketplace offerings (e.g. for Vast.ai)"
   )
 
-  # Templates Command
-  templates_parser = subparsers.add_parser("templates", help="List available pod templates on RunPod")
-  templates_parser.add_argument(
-      "filter",
-      nargs="?",
-      default=None,
-      help="Optional regex pattern to filter templates by ID, Name, or Image (case-insensitive)"
-  )
-  templates_parser.add_argument(
-      "-r",
-      "--regex",
-      "--filter",
-      dest="regex_filter",
-      default=None,
-      help="Optional regex pattern to filter templates by ID, Name, or Image (case-insensitive)"
-  )
-
-  if args is not None and args and (args[0].endswith(".py") or args[0] in ("runpod-shell", "cli.py")):
-    args = args[1:]
-  raw_args = list(args) if args is not None else sys.argv[1:]
-  raw_args = preprocess_argv(raw_args)
   args = parser.parse_args(raw_args)
 
   # Set API Key and resolve provider
-  target_id = getattr(args, "pod", None) or getattr(args, "pod_id", None)
+  target_id = getattr(args, "pod", None) or getattr(args, "pod_id", None) or target_id
   provider = resolve_provider(args=args, instance_id=target_id)
 
   if args.api_key:

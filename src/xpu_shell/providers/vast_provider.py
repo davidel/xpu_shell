@@ -100,6 +100,13 @@ class VastProvider(BaseProvider):
   def name(self) -> str:
     return "vast"
 
+  def register_create_args(self, parser: Any) -> None:
+    parser.add_argument(
+        "--offer-id",
+        type=int,
+        help="Direct Vast.ai offer/ask ID to rent (optional for Vast.ai)."
+    )
+
   def _get_headers(self) -> Dict[str, str]:
     if not self._api_key:
       raise ValueError(

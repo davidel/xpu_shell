@@ -74,6 +74,68 @@ class RunPodProvider(BaseProvider):
   def name(self) -> str:
     return "runpod"
 
+  def register_create_args(self, parser: Any) -> None:
+    parser.add_argument(
+        "--template-id",
+        "--template_id",
+        dest="template_id",
+        default=None,
+        help="RunPod template ID (takes precedence over --image-name)"
+    )
+    parser.add_argument(
+        "--volume-id",
+        help="Network volume ID to attach (optional)"
+    )
+    parser.add_argument(
+        "--ports",
+        default="22/tcp",
+        help="Container ports to expose (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--docker-args",
+        "--docker_args",
+        dest="docker_args",
+        default=None,
+        help="Custom docker arguments to override container entrypoint (optional)"
+    )
+    parser.add_argument(
+        "--cloud-type",
+        choices=["SECURE", "COMMUNITY", "ALL"],
+        default="SECURE",
+        help="Type of cloud network to deploy the pod on (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--vcpu-count",
+        "--vcpu_count",
+        type=int,
+        default=4,
+        dest="vcpu_count",
+        help="Minimum number of vCPUs to allocate (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--memory",
+        type=int,
+        default=8,
+        help="Minimum CPU RAM in GB to allocate (default: %(default)s)"
+    )
+
+  def register_commands(self, subparsers: Any) -> None:
+    templates_parser = subparsers.add_parser("templates", help="List available pod templates on RunPod")
+    templates_parser.add_argument(
+        "filter",
+        nargs="?",
+        default=None,
+        help="Optional regex pattern to filter templates by ID, Name, or Image (case-insensitive)"
+    )
+    templates_parser.add_argument(
+        "-r",
+        "--regex",
+        "--filter",
+        dest="regex_filter",
+        default=None,
+        help="Optional regex pattern to filter templates by ID, Name, or Image (case-insensitive)"
+    )
+
   def list_instances(self) -> List[Instance]:
     pods = runpod.get_pods() or []
     return [normalize_runpod_instance(p) for p in pods]

@@ -69,16 +69,14 @@ Launches and configures a new instance on RunPod or Vast.ai.
 xpush create [OPTIONS]
 ```
 
+#### Common Options (All Providers)
 | Flag | Default | Description |
 |---|---|---|
-| `--provider` | `runpod` | Target cloud provider (`runpod` or `vast`) |
-| `--offer-id` | *None* | Direct Vast.ai offer/ask ID to rent (Vast.ai only) |
+| `--provider` | `runpod` | Target cloud provider (`runpod` or `vast`). Auto-detected if `--offer-id` is given. |
 | `--name` | `persistent-worker` | Name of the instance |
-| `--template-id` | *None* | Pod Template ID to deploy (RunPod only; auto-resolves container image name) |
 | `--image-name` | `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` | Base image for the container (defaults to `pytorch/pytorch:latest` on Vast) |
 | `--gpu-type` | `NVIDIA GeForce RTX 4090` | GPU type to provision (supports substring and fuzzy matching, e.g. `4090`) |
 | `--gpu-count` | `1` | Number of GPUs to allocate |
-| `--volume-id` | *None* | Persistent Network Volume ID to mount (RunPod only) |
 | `--volume-size` | `50` | Volume disk size in GB |
 | `--ssh-key-path` | *None* | Path to public key (checks default paths if omitted) |
 | `--requirements-path` | *None* | Path to `requirements.txt` file |
@@ -87,13 +85,8 @@ xpush create [OPTIONS]
 | `--apt-packages-file` | *None* | Path to a file containing extra apt packages to install |
 | `--env` | *None* | Environment variables (`KEY=VALUE`, or RunPod secret references `KEY='{{ RUNPOD_SECRET_<NAME> }}'`) |
 | `--env-file` | *None* | Path to a `.env` file containing environment variables |
-| `--ports` | `22/tcp` | Container ports to expose |
-| `--docker-args` | *None* | Optional custom docker arguments |
-| `--cloud-type` | `SECURE` | Type of cloud network (`SECURE`, `COMMUNITY`, or `ALL` on RunPod) |
 | `--container-disk-size` | `30` | Container local disk size in GB |
 | `--volume-mount-path` | `/workspace` | Path inside container where the volume is mounted |
-| `--vcpu-count` | `4` | Minimum number of vCPUs to allocate |
-| `--memory` | `8` | Minimum CPU RAM in GB to allocate |
 | `--run-script` | *None* | Path to a local script to execute on the instance via SSH once initialized |
 | `--script-args` | `""` | String arguments to pass to the script |
 | `-d`, `--detach` | `False` | Run script in background without waiting / streaming |
@@ -101,6 +94,29 @@ xpush create [OPTIONS]
 | `--ssh-config` | *None* | Path to custom SSH config file (e.g. `/dev/null`, or `system`) |
 | `--no-wait-for-setup` | `False` | Do not wait for container disk setup to complete before executing script |
 | `--ssh-timeout` | `180` | Max seconds to wait for SSH and setup readiness |
+
+#### RunPod-Specific Options
+These options are registered dynamically when targeting RunPod (`xpush --provider runpod create ...`):
+
+| Flag | Default | Description |
+|---|---|---|
+| `--template-id` | *None* | Pod Template ID to deploy (auto-resolves container image name) |
+| `--volume-id` | *None* | Persistent Network Volume ID to mount |
+| `--cloud-type` | `SECURE` | Type of cloud network (`SECURE`, `COMMUNITY`, or `ALL`) |
+| `--ports` | `22/tcp` | Container ports to expose |
+| `--docker-args` | *None* | Optional custom docker arguments |
+| `--vcpu-count` | `4` | Minimum number of vCPUs to allocate |
+| `--memory` | `8` | Minimum CPU RAM in GB to allocate |
+
+#### Vast.ai-Specific Options
+These options are registered dynamically when targeting Vast.ai (`xpush --provider vast create ...`):
+
+| Flag | Default | Description |
+|---|---|---|
+| `--offer-id` | *None* | Direct Vast.ai offer/ask ID to rent (auto-switches provider to `vast`) |
+
+> [!NOTE]
+> `xpu-shell` uses provider-driven argument parsing. Provider-specific flags (e.g. `--offer-id` for Vast or `--template-id` for RunPod) are only registered for their respective provider and will be rejected if passed to an incompatible provider. Run `xpush --provider <name> create --help` to inspect provider-specific help.
 
 > [!TIP]
 > Creating an instance automatically saves its ID and provider to `~/.config/xpu_shell/.last_pod_id` and `~/.config/xpu_shell/.last_provider`, so subsequent commands (`exec`, `ps`, `logs`, etc.) seamlessly target it without passing any flags.
@@ -146,8 +162,8 @@ xpush info <pod-id> --json
 
 ---
 
-### 4. `templates`
-Lists available pod templates associated with your account and public library, showing Template ID, Name, and Image name. Supports optional regex filtering.
+### 4. `templates` (RunPod only)
+Lists available pod templates associated with your account and public library, showing Template ID, Name, and Image name. Supports optional regex filtering. Only registered when targeting RunPod.
 
 ```bash
 # List all templates
