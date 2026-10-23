@@ -597,6 +597,8 @@ def cmd_create(args):
   if not template_id and not image_name:
     if provider.name == "vast":
       image_name = "pytorch/pytorch:latest"
+    elif provider.name == "spheron":
+      image_name = "ubuntu-22.04"
     else:
       fatal("Either --template-id or --image-name must be specified.", ValueError)
 
@@ -617,7 +619,6 @@ def cmd_create(args):
 
     save_last_pod_id(inst.id)
     save_last_provider("vast")
-
 
     print("Waiting for instance to initialize...")
     start_poll = time.time()
@@ -648,6 +649,57 @@ def cmd_create(args):
       time.sleep(5)
     else:
       fatal(f"Timed out waiting for Vast.ai instance '{inst.id}' to become ready after {poll_timeout} seconds.")
+  elif provider.name == "spheron":
+    print(f"Launching Spheron instance '{args.name}'...")
+    try:
+      disk_total = float(args.container_disk_size) + float(args.volume_size or 0)
+      inst = provider.create_instance(
+          name=args.name,
+          gpu_name=args.gpu_type,
+          image_name=image_name or "ubuntu-22.04",
+          disk_gb=disk_total,
+          env=container_env,
+          offer_id=getattr(args, "offer_id", None),
+          ssh_key_id=getattr(args, "ssh_key_id", None),
+          ssh_public_key=ssh_public_key,
+          region=getattr(args, "region", None),
+          gpu_count=args.gpu_count
+      )
+    except Exception as e:
+      fatal(f"Failed to create Spheron instance: {e}", exc=e.__class__)
+
+    save_last_pod_id(inst.id)
+    save_last_provider("spheron")
+
+    print("Waiting for instance to initialize...")
+    start_poll = time.time()
+    poll_timeout = getattr(args, "ssh_timeout", 180)
+    if poll_timeout < 300:
+      poll_timeout = 300
+    ssh_host = None
+    ssh_port = None
+    last_status = None
+    while time.time() - start_poll < poll_timeout:
+      try:
+        inst = provider.get_instance(inst.id)
+      except Exception:
+        time.sleep(5)
+        continue
+
+      if inst.status in ("TERMINATED", "FAILED", "DEAD"):
+        fatal(f"Instance initialization failed with status: {inst.status}")
+
+      if inst.status != last_status:
+        last_status = inst.status
+        print(f"Instance status: {inst.status}")
+
+      if inst.status == "RUNNING" and inst.ssh_host and inst.ssh_port:
+        ssh_host = inst.ssh_host
+        ssh_port = inst.ssh_port
+        break
+      time.sleep(5)
+    else:
+      fatal(f"Timed out waiting for Spheron instance '{inst.id}' to become ready after {poll_timeout} seconds.")
   else:
     # Launch Pod on RunPod
     print(f"Launching RunPod instance '{args.name}'...")
@@ -1486,8 +1538,9 @@ def cmd_gpus(args):
       fatal(f"Invalid regex pattern '{filter_pattern}': {e}", ValueError)
 
   expand = getattr(args, "expand", False)
-  if provider.name == "vast":
-    print("Fetching available GPU types on Vast.ai...")
+  if provider.name in ("vast", "spheron"):
+    prov_label = "Vast.ai" if provider.name == "vast" else "Spheron"
+    print(f"Fetching available GPU types on {prov_label}...")
     try:
       gpus = provider.list_gpus(filter_pattern, expand=expand)
     except Exception as e:
@@ -1504,13 +1557,13 @@ def cmd_gpus(args):
       print(f"{'OFFER ID':<10} | {'GPU MODEL':<20} | {'GPUS':<5} | {'VRAM':<8} | {'PRICE':<10} | {'RELIABILITY':<12} | {'INET (DOWN/UP)':<18} | {'DISK':<9} | {'LOCATION'}")
       print("-" * 115)
       for o in gpus:
-        offer_id = str(o.get("id", "N/A"))
-        gpu_name = str(o.get("gpu_name") or o.get("displayName") or "Unknown")
-        num_gpus = f"{o.get('num_gpus', 1)}x"
+        offer_id = str(o.get("id") or o.get("offerId") or "N/A")
+        gpu_name = str(o.get("gpu_name") or o.get("gpuType") or o.get("displayName") or "Unknown")
+        num_gpus = f"{o.get('num_gpus') or o.get('gpuCount') or 1}x"
         vram = o.get("gpu_ram") or (o.get("memoryInGb") * 1024 if o.get("memoryInGb") else 0)
         vram_gb = vram // 1024 if vram > 128 else vram
-        vram_str = f"{vram_gb} GB" if vram_gb else "N/A"
-        dph = o.get("dph_total") if o.get("dph_total") is not None else o.get("minPrice")
+        vram_str = f"{int(vram_gb)} GB" if vram_gb else "N/A"
+        dph = o.get("dph_total") if o.get("dph_total") is not None else (o.get("pricePerHour") or o.get("minPrice"))
         price_str = f"${dph:.3f}/hr" if isinstance(dph, (int, float)) else "N/A"
         rel = o.get("reliability2")
         rel_str = f"{rel * 100:.1f}%" if isinstance(rel, (int, float)) else "N/A"
@@ -1520,9 +1573,9 @@ def cmd_gpus(args):
           inet_str = f"{int(down)}/{int(up)} Mbps"
         else:
           inet_str = "N/A"
-        disk = o.get("disk_space")
+        disk = o.get("disk_space") or o.get("disk")
         disk_str = f"{int(disk)} GB" if disk else "N/A"
-        loc = o.get("geolocation") or o.get("country") or "N/A"
+        loc = o.get("geolocation") or o.get("country") or o.get("region") or "N/A"
         print(f"{offer_id:<10} | {gpu_name:<20} | {num_gpus:<5} | {vram_str:<8} | {price_str:<10} | {rel_str:<12} | {inet_str:<18} | {disk_str:<9} | {loc}")
       return
 
@@ -1679,7 +1732,8 @@ def main(args=None):
   # Pass 1: Early provider resolution
   pre_parser = argparse.ArgumentParser(add_help=False)
   pre_parser.add_argument("--provider", default=None)
-  pre_parser.add_argument("--offer-id", type=int, default=None)
+  pre_parser.add_argument("--offer-id", default=None)
+  pre_parser.add_argument("--ssh-key-id", default=None)
   pre_parser.add_argument("-p", "--pod", default=None)
   pre_parser.add_argument("--api-key", default=None)
   pre_args, remaining_args = pre_parser.parse_known_args(raw_args)
@@ -1697,15 +1751,15 @@ def main(args=None):
 
   parser = argparse.ArgumentParser(
       prog="xpu-shell",
-      description="Manage AI accelerator instances (RunPod, Vast.ai, etc.) with remote execution and job supervision."
+      description="Manage AI accelerator instances (RunPod, Vast.ai, Spheron, etc.) with remote execution and job supervision."
   )
   parser.add_argument(
       "--api-key",
-      help="API Key (can also be set via RUNPOD_API_KEY or VAST_API_KEY environment variable)"
+      help="API Key (can also be set via RUNPOD_API_KEY, VAST_API_KEY, or SPHERON_API_KEY environment variable)"
   )
   parser.add_argument(
       "--provider",
-      help="Target provider ('runpod' or 'vast'). Default: auto-detect or runpod.",
+      help="Target provider ('runpod', 'vast', or 'spheron'). Default: auto-detect or runpod.",
       default=None
   )
 
@@ -1715,7 +1769,7 @@ def main(args=None):
   create_parser = subparsers.add_parser("create", help="Create and launch a new instance")
   create_parser.add_argument(
       "--provider",
-      help="Target provider ('runpod' or 'vast'). Default: auto-detect or runpod.",
+      help="Target provider ('runpod', 'vast', or 'spheron'). Default: auto-detect or runpod.",
       default=None
   )
   create_parser.add_argument(
@@ -2305,6 +2359,8 @@ def main(args=None):
   if args.api_key:
     if provider.name == "vast":
       os.environ["VAST_API_KEY"] = args.api_key
+    elif provider.name == "spheron":
+      os.environ["SPHERON_API_KEY"] = args.api_key
     else:
       runpod.api_key = args.api_key
   elif not runpod.api_key:

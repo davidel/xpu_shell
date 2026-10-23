@@ -18,6 +18,7 @@ from xpu_shell.providers import (
 from xpu_shell.providers.base import Instance
 from xpu_shell.providers.runpod_provider import RunPodProvider
 from xpu_shell.providers.vast_provider import VastProvider
+from xpu_shell.providers.spheron_provider import SpheronProvider
 
 
 class TestProviders(unittest.TestCase):
@@ -30,6 +31,10 @@ class TestProviders(unittest.TestCase):
     prov, pid = parse_instance_identifier("vast:98765")
     self.assertEqual(prov, "vast")
     self.assertEqual(pid, "98765")
+
+    prov, pid = parse_instance_identifier("spheron:dep-777")
+    self.assertEqual(prov, "spheron")
+    self.assertEqual(pid, "dep-777")
 
     prov, pid = parse_instance_identifier("plain-id")
     self.assertIsNone(prov)
@@ -44,6 +49,10 @@ class TestProviders(unittest.TestCase):
     self.assertIsInstance(vast, VastProvider)
     self.assertEqual(vast.name, "vast")
 
+    spheron = get_provider("spheron", api_key="test-key")
+    self.assertIsInstance(spheron, SpheronProvider)
+    self.assertEqual(spheron.name, "spheron")
+
     with self.assertRaises(ValueError):
       get_provider("invalid-provider")
 
@@ -56,6 +65,12 @@ class TestProviders(unittest.TestCase):
     # 2. Prefixed ID
     p = resolve_provider(instance_id="vast:12345")
     self.assertIsInstance(p, VastProvider)
+
+    p = resolve_provider(instance_id="spheron:dep-111")
+    self.assertIsInstance(p, SpheronProvider)
+
+    p = resolve_provider(instance_id="spheron-node-222")
+    self.assertIsInstance(p, SpheronProvider)
 
     p = resolve_provider(instance_id="runpod:xyz-999")
     self.assertIsInstance(p, RunPodProvider)
@@ -452,4 +467,323 @@ class TestVastCLIIntegration(unittest.TestCase):
 
     mock_create_inst.assert_called_once()
     self.assertEqual(mock_create_inst.call_args[1]["offer_id"], 9999)
+
+
+class TestSpheronProvider(unittest.TestCase):
+
+  @patch("requests.Session.request")
+  def test_list_instances(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{"deployments": []}'
+    mock_resp.json.return_value = {
+        "deployments": [
+            {
+                "id": "spheron-dep-1",
+                "name": "worker-spheron-1",
+                "status": "Running",
+                "pricePerHour": 0.55,
+                "gpuType": "RTX 4090",
+                "gpuCount": 1,
+                "vcpu": 8,
+                "memoryInGb": 32,
+                "disk": 100,
+                "operatingSystem": "ubuntu-22.04",
+                "connectionDetails": {
+                    "ip": "54.210.10.20",
+                    "port": 22
+                }
+            }
+        ]
+    }
+    mock_req.return_value = mock_resp
+
+    sp = SpheronProvider(api_key="fake-key")
+    instances = sp.list_instances()
+    self.assertEqual(len(instances), 1)
+    inst = instances[0]
+    self.assertEqual(inst.id, "spheron-dep-1")
+    self.assertEqual(inst.name, "worker-spheron-1")
+    self.assertEqual(inst.provider, "spheron")
+    self.assertEqual(inst.status, "RUNNING")
+    self.assertEqual(inst.ssh_host, "54.210.10.20")
+    self.assertEqual(inst.ssh_port, 22)
+    self.assertEqual(inst.gpu_name, "RTX 4090")
+    self.assertEqual(inst.gpu_count, 1)
+    self.assertEqual(inst.cost_per_hr, 0.55)
+    self.assertEqual(inst.vcpu_count, 8)
+    self.assertEqual(inst.memory_gb, 32.0)
+    self.assertEqual(inst.disk_gb, 100.0)
+
+  @patch("requests.Session.request")
+  def test_get_instance(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{}'
+    mock_resp.json.return_value = {
+        "id": "dep-456",
+        "name": "my-spheron-node",
+        "status": "deploying",
+        "gpuType": "A100",
+        "ip": "192.168.1.50"
+    }
+    mock_req.return_value = mock_resp
+
+    sp = SpheronProvider(api_key="fake-key")
+    inst = sp.get_instance("dep-456")
+    self.assertEqual(inst.id, "dep-456")
+    self.assertEqual(inst.status, "INITIALIZING")
+    self.assertEqual(inst.ssh_host, "192.168.1.50")
+    self.assertEqual(inst.ssh_port, 22)
+
+  @patch("requests.Session.request")
+  def test_create_instance_with_offer_id(self, mock_req):
+    mock_post_resp = MagicMock()
+    mock_post_resp.status_code = 200
+    mock_post_resp.content = b'{}'
+    mock_post_resp.json.return_value = {"id": "new-dep-99"}
+
+    mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
+    mock_get_resp.content = b'{}'
+    mock_get_resp.json.return_value = {
+        "id": "new-dep-99",
+        "name": "worker-new",
+        "status": "running",
+        "ip": "1.2.3.4"
+    }
+
+    mock_req.side_effect = [mock_post_resp, mock_get_resp]
+
+    sp = SpheronProvider(api_key="fake-key")
+    inst = sp.create_instance(
+        name="worker-new",
+        offer_id="spheron-offer-4090",
+        ssh_key_id="ssh-key-xyz",
+        gpu_count=1,
+        disk_gb=80.0
+    )
+    self.assertEqual(inst.id, "new-dep-99")
+    self.assertEqual(inst.status, "RUNNING")
+    self.assertEqual(inst.ssh_host, "1.2.3.4")
+
+    # Verify POST body
+    post_call = mock_req.call_args_list[0]
+    self.assertEqual(post_call[0][0], "POST")
+    self.assertIn("/api/deployments", post_call[0][1])
+    body = post_call[1]["json"]
+    self.assertEqual(body["offerId"], "spheron-offer-4090")
+    self.assertEqual(body["sshKeyId"], "ssh-key-xyz")
+    self.assertEqual(body["disk"], 80.0)
+
+  @patch("requests.Session.request")
+  def test_create_instance_auto_search(self, mock_req):
+    mock_offers_resp = MagicMock()
+    mock_offers_resp.status_code = 200
+    mock_offers_resp.content = b'{}'
+    mock_offers_resp.json.return_value = {
+        "offers": [
+            {
+                "id": "offer-expensive",
+                "gpuType": "RTX 4090",
+                "pricePerHour": 0.80,
+                "gpuCount": 1
+            },
+            {
+                "id": "offer-cheap",
+                "gpuType": "RTX 4090",
+                "pricePerHour": 0.40,
+                "gpuCount": 1
+            }
+        ]
+    }
+
+    mock_post_resp = MagicMock()
+    mock_post_resp.status_code = 200
+    mock_post_resp.content = b'{}'
+    mock_post_resp.json.return_value = {"id": "dep-auto"}
+
+    mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
+    mock_get_resp.content = b'{}'
+    mock_get_resp.json.return_value = {
+        "id": "dep-auto",
+        "status": "deploying"
+    }
+
+    mock_req.side_effect = [mock_offers_resp, mock_post_resp, mock_get_resp]
+
+    sp = SpheronProvider(api_key="fake-key")
+    inst = sp.create_instance(gpu_name="RTX 4090")
+    self.assertEqual(inst.id, "dep-auto")
+
+    post_call = mock_req.call_args_list[1]
+    body = post_call[1]["json"]
+    self.assertEqual(body["offerId"], "offer-cheap")
+
+  @patch("requests.Session.request")
+  def test_stop_start_terminate(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{}'
+    mock_resp.json.return_value = {}
+    mock_req.return_value = mock_resp
+
+    sp = SpheronProvider(api_key="fake-key")
+    sp.stop_instance("dep-123")
+    self.assertEqual(mock_req.call_args_list[0][0][0], "POST")
+    self.assertIn("/api/deployments/dep-123/stop", mock_req.call_args_list[0][0][1])
+
+    sp.start_instance("dep-123")
+    self.assertEqual(mock_req.call_args_list[1][0][0], "POST")
+    self.assertIn("/api/deployments/dep-123/start", mock_req.call_args_list[1][0][1])
+
+    sp.terminate_instance("dep-123")
+    self.assertEqual(mock_req.call_args_list[2][0][0], "DELETE")
+    self.assertIn("/api/deployments/dep-123", mock_req.call_args_list[2][0][1])
+
+  @patch("requests.Session.request")
+  def test_list_gpus(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{}'
+    mock_resp.json.return_value = {
+        "offers": [
+            {
+                "id": "off-1",
+                "gpuType": "RTX 4090",
+                "pricePerHour": 0.45,
+                "memoryInGb": 24,
+                "gpuCount": 1
+            },
+            {
+                "id": "off-2",
+                "gpuType": "RTX 4090",
+                "pricePerHour": 0.35,
+                "memoryInGb": 24,
+                "gpuCount": 1
+            },
+            {
+                "id": "off-3",
+                "gpuType": "A100",
+                "pricePerHour": 1.50,
+                "memoryInGb": 80,
+                "gpuCount": 1
+            }
+        ]
+    }
+    mock_req.return_value = mock_resp
+
+    sp = SpheronProvider(api_key="fake-key")
+    gpus = sp.list_gpus()
+    self.assertEqual(len(gpus), 2)
+    rtx_agg = next(g for g in gpus if g["displayName"] == "RTX 4090")
+    self.assertEqual(rtx_agg["count"], 2)
+    self.assertEqual(rtx_agg["minPrice"], 0.35)
+    self.assertEqual(rtx_agg["maxPrice"], 0.45)
+    self.assertEqual(rtx_agg["memoryInGb"], 24)
+
+  @patch("requests.Session.request")
+  def test_list_gpus_expand(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{}'
+    mock_resp.json.return_value = {
+        "offers": [
+            {
+                "id": "spheron-4090-us",
+                "gpuType": "RTX 4090",
+                "pricePerHour": 0.42,
+                "memoryInGb": 24,
+                "gpuCount": 1,
+                "disk": 100,
+                "region": "us-east-1"
+            },
+            {
+                "id": "spheron-a100-eu",
+                "gpuType": "A100",
+                "pricePerHour": 1.80,
+                "memoryInGb": 80,
+                "gpuCount": 1,
+                "disk": 200,
+                "region": "eu-central-1"
+            }
+        ]
+    }
+    mock_req.return_value = mock_resp
+
+    sp = SpheronProvider(api_key="fake-key")
+    offers = sp.list_gpus("4090", expand=True)
+    self.assertEqual(len(offers), 1)
+    self.assertEqual(offers[0]["id"], "spheron-4090-us")
+
+  def test_spheron_rejects_template_id(self):
+    test_args = ["cli.py", "create", "--provider", "spheron", "--template-id", "some-template"]
+    with patch.object(sys, "argv", test_args):
+      with patch("sys.stderr"):
+        with self.assertRaises(SystemExit) as ctx:
+          cli.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+  def test_spheron_rejects_cloud_type(self):
+    test_args = ["cli.py", "create", "--provider", "spheron", "--cloud-type", "SECURE"]
+    with patch.object(sys, "argv", test_args):
+      with patch("sys.stderr"):
+        with self.assertRaises(SystemExit) as ctx:
+          cli.main()
+        self.assertEqual(ctx.exception.code, 2)
+
+  @patch("xpu_shell.cli.resolve_provider")
+  @patch("sys.stdout")
+  def test_spheron_cli_gpus(self, mock_stdout, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "spheron"
+    mock_prov.list_gpus.return_value = [
+        {
+            "id": "RTX 4090",
+            "displayName": "RTX 4090",
+            "memoryInGb": 24,
+            "minPrice": 0.35,
+            "maxPrice": 0.49,
+            "count": 5
+        }
+    ]
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "--provider", "spheron", "--api-key", "fake-key", "gpus"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    calls = [call[0][0] for call in mock_stdout.write.call_args_list if call[0]]
+    output = "".join(calls)
+    self.assertIn("RTX 4090", output)
+    self.assertIn("$0.35/hr", output)
+    self.assertIn("5 offers", output)
+
+  @patch("xpu_shell.providers.spheron_provider.SpheronProvider.create_instance")
+  @patch("xpu_shell.providers.spheron_provider.SpheronProvider.get_instance")
+  @patch("xpu_shell.cli.run_container_setup")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("xpu_shell.cli.get_ssh_key")
+  @patch("time.sleep")
+  def test_create_with_ssh_key_id_auto_detects_spheron(self, mock_sleep, mock_ssh_key, mock_find_priv, mock_wait_ssh, mock_setup, mock_get_inst, mock_create_inst):
+    mock_ssh_key.return_value = "ssh-rsa fake_public_key"
+    fake_inst = Instance(
+        id="spheron-auto-1",
+        name="test-worker",
+        provider="spheron",
+        status="RUNNING",
+        ssh_host="ssh.spheron.ai",
+        ssh_port=22
+    )
+    mock_create_inst.return_value = fake_inst
+    mock_get_inst.return_value = fake_inst
+
+    test_args = ["cli.py", "create", "--ssh-key-id", "spheron-key-999"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_create_inst.assert_called_once()
+    self.assertEqual(mock_create_inst.call_args[1]["ssh_key_id"], "spheron-key-999")
 

@@ -1,10 +1,10 @@
 # XPU Shell (`xpush`)
 
-A unified command-line interface to provision, execute, and supervise workloads on AI accelerators across multiple cloud providers (**RunPod**, **Vast.ai**, etc.) with persistent network volumes, customized container environments, and automatic SSH setup.
+A unified command-line interface to provision, execute, and supervise workloads on AI accelerators across multiple cloud providers (**RunPod**, **Vast.ai**, **Spheron**, etc.) with persistent network volumes, customized container environments, and automatic SSH setup.
 
 ## Features
 
-- **Multi-Cloud Accelerator Support**: Manage instances across **RunPod** and **Vast.ai** using a single unified CLI, with automatic provider detection from instance IDs or state.
+- **Multi-Cloud Accelerator Support**: Manage instances across **RunPod**, **Vast.ai**, and **Spheron** using a single unified CLI, with automatic provider detection from instance IDs or state.
 - **Fast CLI Ergonomics (`xpush`)**: Provided with short `xpush` and full `xpu-shell` command aliases (plus backward-compatible `runpod-shell`).
 - **Docker-like Subcommands**: Simple interface to `create`, `list`, `info`, `stop`, `terminate`, `templates`, `gpus`, `run`, `exec`, and `cp`.
 - **Rich Instance Inspection (`info`)**: Inspect comprehensive specifications including GPU model, VRAM size, allocated vCPUs, system RAM, disk volumes, live utilization metrics (CPU %, RAM %, GPU %, VRAM %), uptime, cost, and direct SSH connection details.
@@ -41,6 +41,10 @@ A unified command-line interface to provision, execute, and supervise workloads 
    # For Vast.ai:
    export VAST_API_KEY="your_vast_api_key"
    # (Vast also automatically detects ~/.vast_api_key)
+
+   # For Spheron:
+   export SPHERON_API_KEY="your_spheron_api_key"
+   # (Spheron also automatically detects ~/.spheron_api_key)
    ```
 
    *(Optional)* Configure or isolate the persistence directory (defaults to `~/.config/xpu_shell`):
@@ -57,8 +61,8 @@ A unified command-line interface to provision, execute, and supervise workloads 
 
 ### Global Options
 Every subcommand supports the following options:
-* `--api-key`: API key for the active provider (RunPod or Vast.ai). Defaults to `RUNPOD_API_KEY` or `VAST_API_KEY` / `~/.vast_api_key`.
-* `--provider`: Target provider (`runpod` or `vast`). Defaults to auto-detecting from the target ID, the last used provider in `~/.config/xpu_shell/.last_provider`, or `runpod`.
+* `--api-key`: API key for the active provider (RunPod, Vast.ai, or Spheron). Defaults to `RUNPOD_API_KEY`, `VAST_API_KEY` / `~/.vast_api_key`, or `SPHERON_API_KEY` / `~/.spheron_api_key`.
+* `--provider`: Target provider (`runpod`, `vast`, or `spheron`). Defaults to auto-detecting from the target ID, the last used provider in `~/.config/xpu_shell/.last_provider`, or `runpod`.
 
 ---
 
@@ -114,6 +118,15 @@ These options are registered dynamically when targeting Vast.ai (`xpush --provid
 | Flag | Default | Description |
 |---|---|---|
 | `--offer-id` | *None* | Direct Vast.ai offer/ask ID to rent (auto-switches provider to `vast`) |
+
+#### Spheron-Specific Options
+These options are registered dynamically when targeting Spheron (`xpush --provider spheron create ...`):
+
+| Flag | Default | Description |
+|---|---|---|
+| `--offer-id` | *None* | Direct Spheron offer ID to deploy |
+| `--ssh-key-id` | *None* | Spheron pre-registered SSH key ID (auto-switches provider to `spheron`) |
+| `--region` | *None* | Target deployment region (optional) |
 
 > [!NOTE]
 > `xpu-shell` uses provider-driven argument parsing. Provider-specific flags (e.g. `--offer-id` for Vast or `--template-id` for RunPod) are only registered for their respective provider and will be rejected if passed to an incompatible provider. Run `xpush --provider <name> create --help` to inspect provider-specific help.
