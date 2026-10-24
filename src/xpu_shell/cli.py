@@ -591,16 +591,8 @@ def cmd_create(args):
   container_env["PUBLIC_KEY"] = ssh_public_key
 
   provider = resolve_provider(args=args)
-  # Check image_name and template_id
   template_id = getattr(args, "template_id", None)
   image_name = getattr(args, "image_name", None)
-  if not template_id and not image_name:
-    if provider.name == "vast":
-      image_name = "pytorch/pytorch:latest"
-    elif provider.name == "spheron":
-      image_name = "ubuntu-22.04"
-    else:
-      fatal("Either --template-id or --image-name must be specified.", ValueError)
 
   if provider.name == "vast":
     print(f"Launching Vast.ai instance '{args.name}'...")
@@ -608,7 +600,7 @@ def cmd_create(args):
       disk_total = float(args.container_disk_size) + float(args.volume_size or 0)
       inst = provider.create_instance(
           gpu_name=args.gpu_type,
-          image_name=image_name or "pytorch/pytorch:latest",
+          image_name=image_name,
           disk_gb=disk_total,
           env=container_env,
           offer_id=getattr(args, "offer_id", None),
@@ -656,7 +648,7 @@ def cmd_create(args):
       inst = provider.create_instance(
           name=args.name,
           gpu_name=args.gpu_type,
-          image_name=image_name or "ubuntu-22.04",
+          image_name=image_name,
           disk_gb=disk_total,
           env=container_env,
           offer_id=getattr(args, "offer_id", None),
@@ -726,8 +718,10 @@ def cmd_create(args):
       if not template or not template.get("imageName"):
         fatal(f"Template '{template_id}' not found or does not specify an image name.", ValueError)
       create_args["image_name"] = template["imageName"]
+    elif image_name or provider.default_image:
+      create_args["image_name"] = image_name or provider.default_image
     else:
-      create_args["image_name"] = image_name
+      fatal("Either --template-id or --image-name must be specified.", ValueError)
 
     if args.volume_id:
       create_args["network_volume_id"] = args.volume_id

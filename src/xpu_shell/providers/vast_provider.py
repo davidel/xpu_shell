@@ -100,6 +100,10 @@ class VastProvider(BaseProvider):
   def name(self) -> str:
     return "vast"
 
+  @property
+  def default_image(self) -> Optional[str]:
+    return "pytorch/pytorch:latest"
+
   def register_create_args(self, parser: Any) -> None:
     parser.add_argument(
         "--offer-id",
@@ -217,7 +221,7 @@ class VastProvider(BaseProvider):
   def create_instance(
       self,
       gpu_name: Optional[str] = None,
-      image_name: str = "pytorch/pytorch:latest",
+      image_name: Optional[str] = None,
       disk_gb: float = 50.0,
       env: Optional[Dict[str, str]] = None,
       offer_id: Optional[int] = None,
@@ -239,9 +243,10 @@ class VastProvider(BaseProvider):
         )
       target_offer_id = offers[0]["id"]
 
+    resolved_image = image_name or self.default_image
     body = {
         "client_id": "me",
-        "image": image_name,
+        "image": resolved_image,
         "disk": disk_gb,
         "runtype": "ssh"
     }

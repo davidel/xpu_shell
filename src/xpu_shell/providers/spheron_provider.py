@@ -137,6 +137,10 @@ class SpheronProvider(BaseProvider):
   def name(self) -> str:
     return "spheron"
 
+  @property
+  def default_image(self) -> Optional[str]:
+    return "ubuntu-22.04"
+
   def register_create_args(self, parser: Any) -> None:
     parser.add_argument(
         "--offer-id",
@@ -322,7 +326,7 @@ class SpheronProvider(BaseProvider):
         "gpuType": target_gpu_type,
         "gpuCount": gpu_count,
         "disk": disk_gb,
-        "operatingSystem": image_name or "ubuntu-22.04"
+        "operatingSystem": image_name or self.default_image
     }
 
     if ssh_key_id:

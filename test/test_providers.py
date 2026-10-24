@@ -232,6 +232,39 @@ class TestVastProvider(unittest.TestCase):
     vast.terminate_instance("12345")
     self.assertEqual(mock_req.call_count, 2)
 
+  @patch("requests.Session.request")
+  def test_create_instance_default_image(self, mock_req):
+    mock_put_resp = MagicMock()
+    mock_put_resp.status_code = 200
+    mock_put_resp.content = b'{}'
+    mock_put_resp.json.return_value = {"new_contract": 5555}
+
+    mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
+    mock_get_resp.content = b'{}'
+    mock_get_resp.json.return_value = {
+        "instances": [
+            {
+                "id": 5555,
+                "actual_status": "running",
+                "ssh_host": "ssh.vast.ai",
+                "ssh_port": 2222
+            }
+        ]
+    }
+    mock_req.side_effect = [mock_put_resp, mock_get_resp]
+
+    vast = VastProvider(api_key="fake-vast-key")
+    self.assertEqual(vast.default_image, "pytorch/pytorch:latest")
+    inst = vast.create_instance(offer_id=1234)
+    self.assertEqual(inst.id, "5555")
+
+    put_call = mock_req.call_args_list[0]
+    self.assertEqual(put_call[0][0], "PUT")
+    self.assertIn("/asks/1234/", put_call[0][1])
+    body = put_call[1]["json"]
+    self.assertEqual(body["image"], "pytorch/pytorch:latest")
+
 
 class TestVastCLIIntegration(unittest.TestCase):
 
@@ -468,6 +501,32 @@ class TestVastCLIIntegration(unittest.TestCase):
     mock_create_inst.assert_called_once()
     self.assertEqual(mock_create_inst.call_args[1]["offer_id"], 9999)
 
+  @patch("xpu_shell.providers.vast_provider.VastProvider.create_instance")
+  @patch("xpu_shell.providers.vast_provider.VastProvider.get_instance")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("xpu_shell.cli.get_ssh_key")
+  @patch("time.sleep")
+  def test_create_without_image_name_passes_none_to_vast_provider(self, mock_sleep, mock_ssh_key, mock_find_priv, mock_wait_ssh, mock_get_inst, mock_create_inst):
+    mock_ssh_key.return_value = "ssh-rsa fake_public_key"
+    fake_inst = Instance(
+        id="12345",
+        name="test-worker",
+        provider="vast",
+        status="RUNNING",
+        ssh_host="ssh.vast.ai",
+        ssh_port=2222
+    )
+    mock_create_inst.return_value = fake_inst
+    mock_get_inst.return_value = fake_inst
+
+    test_args = ["cli.py", "create", "--offer-id", "9999"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_create_inst.assert_called_once()
+    self.assertIsNone(mock_create_inst.call_args[1]["image_name"])
+
 
 class TestSpheronProvider(unittest.TestCase):
 
@@ -575,6 +634,8 @@ class TestSpheronProvider(unittest.TestCase):
     self.assertEqual(body["offerId"], "spheron-offer-4090")
     self.assertEqual(body["sshKeyId"], "ssh-key-xyz")
     self.assertEqual(body["disk"], 80.0)
+    self.assertEqual(body["operatingSystem"], "ubuntu-22.04")
+    self.assertEqual(sp.default_image, "ubuntu-22.04")
 
   @patch("requests.Session.request")
   def test_create_instance_auto_search(self, mock_req):
@@ -786,4 +847,5 @@ class TestSpheronProvider(unittest.TestCase):
 
     mock_create_inst.assert_called_once()
     self.assertEqual(mock_create_inst.call_args[1]["ssh_key_id"], "spheron-key-999")
+    self.assertIsNone(mock_create_inst.call_args[1]["image_name"])
 

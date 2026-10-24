@@ -29,6 +29,11 @@ class BaseProvider(ABC):
   def name(self) -> str:
     pass
 
+  @property
+  def default_image(self) -> Optional[str]:
+    """Default container/OS image for this provider, if any."""
+    return None
+
   def register_create_args(self, parser: Any) -> None:
     """Register provider-specific CLI arguments for the create command."""
     pass
