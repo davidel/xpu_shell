@@ -778,6 +778,79 @@ class TestSpheronProvider(unittest.TestCase):
     self.assertEqual(len(offers), 1)
     self.assertEqual(offers[0]["id"], "spheron-4090-us")
 
+  @patch("requests.Session.request")
+  def test_list_gpus_grouped_structure(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{}'
+    mock_resp.json.return_value = {
+        "page": 1,
+        "totalPages": 1,
+        "total": 2,
+        "data": [
+            {
+                "gpuType": "B300_SXM6",
+                "displayName": "B300 SXM6",
+                "offers": [
+                    {
+                        "offerId": "spheron-b300-1",
+                        "price": 6.67,
+                        "gpu_memory": 262,
+                        "gpuCount": 1,
+                        "storage": 256,
+                        "available": True,
+                        "clusters": ["UK South 1"]
+                    },
+                    {
+                        "offerId": "spheron-b300-2",
+                        "price": 9.21,
+                        "gpu_memory": 262,
+                        "gpuCount": 1,
+                        "storage": 256,
+                        "available": True,
+                        "clusters": ["EU West 2"]
+                    }
+                ]
+            },
+            {
+                "gpuType": "CPU",
+                "displayName": "CPU NODE",
+                "offers": [
+                    {
+                        "offerId": "spheron-cpu-1",
+                        "price": 0.09,
+                        "gpu_memory": 0,
+                        "gpuCount": 1,
+                        "storage": 100,
+                        "available": True
+                    }
+                ]
+            }
+        ]
+    }
+    mock_req.return_value = mock_resp
+
+    sp = SpheronProvider(api_key="fake-key")
+    gpus = sp.list_gpus()
+    self.assertEqual(len(gpus), 2)
+    b300 = next(g for g in gpus if g["displayName"] == "B300_SXM6")
+    self.assertEqual(b300["count"], 2)
+    self.assertEqual(b300["minPrice"], 6.67)
+    self.assertEqual(b300["maxPrice"], 9.21)
+    self.assertEqual(b300["memoryInGb"], 262)
+
+    cpu = next(g for g in gpus if g["displayName"] == "CPU")
+    self.assertEqual(cpu["count"], 1)
+    self.assertEqual(cpu["minPrice"], 0.09)
+    self.assertEqual(cpu["memoryInGb"], 0)
+
+    expand_offers = sp.list_gpus("B300", expand=True)
+    self.assertEqual(len(expand_offers), 2)
+    self.assertEqual(expand_offers[0]["id"], "spheron-b300-1")
+    self.assertEqual(expand_offers[0]["memoryInGb"], 262)
+    self.assertEqual(expand_offers[0]["disk"], 256)
+    self.assertEqual(expand_offers[0]["region"], "UK South 1")
+
   def test_spheron_rejects_template_id(self):
     test_args = ["cli.py", "create", "--provider", "spheron", "--template-id", "some-template"]
     with patch.object(sys, "argv", test_args):

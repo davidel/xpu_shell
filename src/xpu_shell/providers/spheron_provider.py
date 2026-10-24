@@ -242,44 +242,125 @@ class SpheronProvider(BaseProvider):
       min_disk_gb: Optional[float] = None,
       region: Optional[str] = None
   ) -> List[Dict[str, Any]]:
-    params: Dict[str, Any] = {}
+    params: Dict[str, Any] = {"limit": 100}
     if region:
       params["region"] = region
 
-    try:
-      data = self._request("GET", "/api/gpu-offers", params=params)
-    except Exception:
-      data = self._request("GET", "/api/offers", params=params)
+    page = 1
+    raw_items = []
+    while True:
+      params["page"] = page
+      try:
+        data = self._request("GET", "/api/gpu-offers", params=params)
+      except Exception:
+        data = self._request("GET", "/api/offers", params=params)
+
+      if isinstance(data, list):
+        raw_items.extend(data)
+        break
+      elif isinstance(data, dict):
+        if "offers" in data and isinstance(data["offers"], list):
+          raw_items.extend(data["offers"])
+          break
+        elif "gpuOffers" in data and isinstance(data["gpuOffers"], list):
+          raw_items.extend(data["gpuOffers"])
+          break
+        elif "data" in data and isinstance(data["data"], list):
+          raw_items.extend(data["data"])
+          total_pages = data.get("totalPages", 1)
+          if page >= total_pages:
+            break
+          page += 1
+        else:
+          break
+      else:
+        break
 
     offers = []
-    if isinstance(data, list):
-      offers = data
-    elif isinstance(data, dict):
-      offers = data.get("offers") or data.get("data") or data.get("gpuOffers") or []
-
-    if not isinstance(offers, list):
-      offers = []
+    for item in raw_items:
+      if not isinstance(item, dict):
+        continue
+      sub_offers = item.get("offers")
+      if isinstance(sub_offers, list) and sub_offers:
+        for sub in sub_offers:
+          if not isinstance(sub, dict):
+            continue
+          o = dict(sub)
+          if not o.get("gpuType"):
+            o["gpuType"] = item.get("gpuType") or item.get("gpuModel")
+          if not o.get("displayName"):
+            o["displayName"] = item.get("displayName") or o.get("name")
+          offers.append(o)
+      else:
+        offers.append(dict(item))
 
     filtered = []
     for o in offers:
       if o.get("available") is False or o.get("rented") is True:
         continue
-      count = o.get("gpuCount") or o.get("numGpus") or 1
+      count = o.get("gpuCount") or o.get("num_gpus") or o.get("numGpus") or 1
       if count < min_gpus:
         continue
-      if min_disk_gb:
-        disk = o.get("disk") or o.get("diskInGb") or o.get("disk_space")
-        if disk is not None and disk < min_disk_gb:
+
+      disk = o.get("disk") or o.get("storage") or o.get("diskInGb") or o.get("disk_space")
+      if min_disk_gb and disk is not None and disk < min_disk_gb:
+        continue
+
+      clusters = o.get("clusters")
+      reg = o.get("region") or (clusters[0] if isinstance(clusters, list) and clusters else None)
+      if region:
+        reg_clean = str(reg or "").lower()
+        if region.lower() not in reg_clean:
           continue
+
       if gpu_name:
         off_gpu = str(o.get("gpuType") or o.get("gpuName") or o.get("name") or "")
-        pattern = gpu_name.replace(" ", "").lower()
-        if pattern not in off_gpu.replace(" ", "").lower():
+        off_disp = str(o.get("displayName") or "")
+        pattern = gpu_name.replace(" ", "").replace("_", "").lower()
+        candidates = (off_gpu + " " + off_disp).replace(" ", "").replace("_", "").lower()
+        if pattern not in candidates:
           continue
+
+      vram = o.get("gpu_memory") or o.get("memoryInGb") or o.get("ramGb") or o.get("vram") or 0
+      try:
+        vram = float(vram)
+        if vram >= 1024:
+          vram = vram / 1024.0
+      except (ValueError, TypeError):
+        vram = 0
+
+      price = (
+          o.get("pricePerHour")
+          or o.get("price")
+          or o.get("spot_price")
+          or o.get("dph")
+          or o.get("costPerHr")
+          or o.get("dph_total")
+          or 0.0
+      )
+      try:
+        price = float(price)
+      except (ValueError, TypeError):
+        price = 0.0
+
+      o["id"] = o.get("id") or o.get("offerId")
+      o["offerId"] = o["id"]
+      o["gpuCount"] = count
+      o["num_gpus"] = count
+      o["memoryInGb"] = int(vram)
+      o["gpu_ram"] = int(vram * 1024)
+      o["pricePerHour"] = price
+      o["price"] = price
+      o["dph_total"] = price
+      o["disk"] = disk
+      o["disk_space"] = disk
+      o["region"] = reg
+      o["country"] = reg
+      o["geolocation"] = reg
       filtered.append(o)
 
     def get_price(item: Dict[str, Any]) -> float:
-      price = item.get("pricePerHour") or item.get("dph") or item.get("costPerHr") or item.get("dph_total")
+      price = item.get("pricePerHour")
       try:
         return float(price)
       except (ValueError, TypeError):
@@ -379,7 +460,9 @@ class SpheronProvider(BaseProvider):
         regex = re.compile(filter_pattern, re.IGNORECASE)
         offers = [
             o for o in offers
-            if regex.search(str(o.get("gpuType") or o.get("gpuName") or "")) or regex.search(str(o.get("id") or o.get("offerId") or ""))
+            if regex.search(str(o.get("gpuType") or o.get("gpuName") or ""))
+            or regex.search(str(o.get("displayName") or ""))
+            or regex.search(str(o.get("id") or o.get("offerId") or ""))
         ]
       return offers
 
@@ -387,16 +470,16 @@ class SpheronProvider(BaseProvider):
 
     for o in offers:
       gname = str(o.get("gpuType") or o.get("gpuName") or "Unknown")
-      price = o.get("pricePerHour") or o.get("dph") or o.get("costPerHr") or 0.0
+      price = o.get("pricePerHour") or 0.0
       try:
         price = float(price)
       except (ValueError, TypeError):
         price = 0.0
 
-      vram = o.get("memoryInGb") or o.get("ramGb") or o.get("vram") or 0
+      vram = o.get("memoryInGb") or o.get("gpu_memory") or o.get("ramGb") or o.get("vram") or 0
       try:
         vram = float(vram)
-        if vram > 256:
+        if vram >= 1024:
           vram = vram / 1024.0
       except (ValueError, TypeError):
         vram = 0
@@ -415,9 +498,14 @@ class SpheronProvider(BaseProvider):
         agg["minPrice"] = min(agg["minPrice"], price)
         agg["maxPrice"] = max(agg["maxPrice"], price)
         agg["count"] += 1
+        if not agg["memoryInGb"] and vram:
+          agg["memoryInGb"] = int(vram)
 
     result = list(gpu_aggregates.values())
     if filter_pattern:
       regex = re.compile(filter_pattern, re.IGNORECASE)
-      result = [g for g in result if regex.search(g["displayName"])]
+      result = [
+          g for g in result
+          if regex.search(g.get("displayName", "")) or regex.search(g.get("id", ""))
+      ]
     return result
