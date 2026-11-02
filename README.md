@@ -76,9 +76,10 @@ xpush create [OPTIONS]
 #### Common Options (All Providers)
 | Flag | Default | Description |
 |---|---|---|
-| `--provider` | `runpod` | Target cloud provider (`runpod` or `vast`). Auto-detected if `--offer-id` is given. |
+| `--provider` | `runpod` | Target cloud provider (`runpod`, `vast`, or `spheron`). Auto-detected if `--offer-id` or `--ssh-key-id` is given. |
+| `-t`, `--template` | *None* | Template or image identifier (e.g. `template:<id>` or `image:<name>`). Auto-dispatches to provider template or container/OS image across all providers. |
 | `--name` | `persistent-worker` | Name of the instance |
-| `--image-name` | `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` | Base image for the container (defaults to `pytorch/pytorch:latest` on Vast) |
+| `--image-name` | *Provider default* | Base image for the container (backward-compatible alias for `--template image:<name>`) |
 | `--gpu-type` | `NVIDIA GeForce RTX 4090` | GPU type to provision (supports substring and fuzzy matching, e.g. `4090`) |
 | `--gpu-count` | `1` | Number of GPUs to allocate |
 | `--volume-size` | `50` | Volume disk size in GB |
@@ -175,16 +176,22 @@ xpush info <pod-id> --json
 
 ---
 
-### 4. `templates` (RunPod only)
-Lists available pod templates associated with your account and public library, showing Template ID, Name, and Image name. Supports optional regex filtering. Only registered when targeting RunPod.
+### 4. `templates`
+Lists available templates and container / OS images across any supported provider (**RunPod**, **Vast.ai**, **Spheron**). Displays prefixed identifiers (`template:<id>` vs `image:<name>`) that can be directly passed to `create --template`. Supports optional regex filtering.
 
 ```bash
-# List all templates
+# List templates for default provider (or RunPod)
 xpush templates
+
+# List templates and images on Vast.ai
+xpush --provider vast templates
+
+# List OS images on Spheron
+xpush --provider spheron templates
 
 # Filter templates by pattern (case-insensitive regex)
 xpush templates pytorch
-xpush templates "vllm|tgi"
+xpush --provider vast templates pytorch
 xpush templates -r "pytorch|cuda"
 ```
 
@@ -458,13 +465,17 @@ xpush create --provider vast --gpu-type 4090
 xpush create --provider vast --offer-id 1234567
 ```
 
-### Launch using a Template ID (RunPod)
+### Launch using a Template or Image
 ```bash
-# Search for templates
-xpush templates pytorch
+# Search for templates on any provider
+xpush --provider vast templates pytorch
+xpush --provider runpod templates pytorch
 
-# Create pod from template
-xpush create --template-id "runpod-pytorch" --gpu-type 4090
+# Create instance from template
+xpush create --template "template:c21f8a" --gpu-type 4090
+
+# Create instance from container image
+xpush --provider vast create --template "image:pytorch/pytorch:latest" --gpu-type 4090
 ```
 
 ### Launch attaching a Network Volume and Python requirements
