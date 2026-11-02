@@ -1932,6 +1932,79 @@ class TestRunPodShellCLI(unittest.TestCase):
     self.assertEqual(called_cmd[-2], "root@1.2.3.4:/workspace/temp/co*")
     self.assertEqual(called_cmd[-1], "./dest/")
 
+  @patch("subprocess.run")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("runpod.get_pod")
+  def test_cp_with_rsync_flag(self, mock_get_pod, mock_find_priv, mock_subproc):
+    mock_find_priv.return_value = None
+    mock_get_pod.return_value = {
+        "id": "pod-rsync-1",
+        "runtime": {
+            "ports": [{"privatePort": 22, "isExternal": 2222, "address": "1.2.3.4"}]
+        }
+    }
+    mock_subproc.return_value = MagicMock(returncode=0)
+
+    test_args = [
+        "cli.py",
+        "--api-key", "fake-api-key",
+        "cp",
+        "-r",
+        "--rsync",
+        "--delete",
+        "--exclude", "*.pyc",
+        "./src/",
+        "pod-rsync-1:/workspace/src/"
+    ]
+
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_get_pod.assert_called_once_with("pod-rsync-1")
+    called_cmd = mock_subproc.call_args[0][0]
+    self.assertEqual(called_cmd[0], "rsync")
+    self.assertIn("-r", called_cmd)
+    self.assertIn("-z", called_cmd)
+    self.assertIn("--delete", called_cmd)
+    self.assertIn("--exclude", called_cmd)
+    self.assertIn("*.pyc", called_cmd)
+    self.assertEqual(called_cmd[-2], "./src/")
+    self.assertEqual(called_cmd[-1], "root@1.2.3.4:/workspace/src/")
+
+  @patch("subprocess.run")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("runpod.get_pod")
+  def test_rsync_command(self, mock_get_pod, mock_find_priv, mock_subproc):
+    mock_find_priv.return_value = None
+    mock_get_pod.return_value = {
+        "id": "pod-rsync-2",
+        "runtime": {
+            "ports": [{"privatePort": 22, "isExternal": 2222, "address": "1.2.3.4"}]
+        }
+    }
+    mock_subproc.return_value = MagicMock(returncode=0)
+
+    test_args = [
+        "cli.py",
+        "--api-key", "fake-api-key",
+        "rsync",
+        "-n",
+        "./data/",
+        "pod-rsync-2:/workspace/data/"
+    ]
+
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_get_pod.assert_called_once_with("pod-rsync-2")
+    called_cmd = mock_subproc.call_args[0][0]
+    self.assertEqual(called_cmd[0], "rsync")
+    self.assertIn("-a", called_cmd)
+    self.assertIn("-z", called_cmd)
+    self.assertIn("--dry-run", called_cmd)
+    self.assertEqual(called_cmd[-2], "./data/")
+    self.assertEqual(called_cmd[-1], "root@1.2.3.4:/workspace/data/")
+
   def test_cp_validation_errors(self):
     # No remote path
     test_args = ["cli.py", "--api-key", "fake-api-key", "cp", "local1", "local2"]

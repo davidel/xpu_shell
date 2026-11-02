@@ -430,6 +430,37 @@ class TestSSHRunner(unittest.TestCase):
     self.assertEqual(cmd[-2], "root@1.2.3.4:/workspace/file.txt")
     self.assertEqual(cmd[-1], "./file.txt")
 
+  def test_build_rsync_cmd_basic(self):
+    cmd = ssh_runner.build_rsync_cmd(
+        sources=["./local_dir/"],
+        dest="root@1.2.3.4:/workspace/dest/",
+        port=2222,
+        archive=True,
+        compress=True,
+        delete=True,
+        exclude=["*.pyc", ".git"],
+        dry_run=True,
+        quiet=False,
+        private_key_path=Path("/tmp/key"),
+        ssh_config_path="/dev/null"
+    )
+    self.assertEqual(cmd[0], "rsync")
+    self.assertIn("-e", cmd)
+    e_idx = cmd.index("-e")
+    rsh = cmd[e_idx + 1]
+    self.assertIn("ssh -p 2222", rsh)
+    self.assertIn("-F /dev/null", rsh)
+    self.assertIn("-i /tmp/key", rsh)
+    self.assertIn("-a", cmd)
+    self.assertIn("-z", cmd)
+    self.assertIn("--delete", cmd)
+    self.assertIn("--dry-run", cmd)
+    self.assertIn("--exclude", cmd)
+    self.assertIn("*.pyc", cmd)
+    self.assertIn(".git", cmd)
+    self.assertEqual(cmd[-2], "./local_dir/")
+    self.assertEqual(cmd[-1], "root@1.2.3.4:/workspace/dest/")
+
   @patch("xpu_shell.ssh_runner.wait_for_ssh")
   @patch("xpu_shell.ssh_runner.wait_for_setup")
   @patch("subprocess.run")

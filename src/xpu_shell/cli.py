@@ -22,7 +22,8 @@ from xpu_shell.ssh_runner import (
     kill_remote_job,
     wait_for_ssh,
     build_ssh_cmd,
-    build_cp_cmd
+    build_cp_cmd,
+    build_rsync_cmd
 )
 from xpu_shell.providers import (
     BaseProvider,
@@ -1040,23 +1041,48 @@ def cmd_cp(args):
   else:
     transformed_dest = dest
 
-  scp_cmd = build_cp_cmd(
-      sources=transformed_sources,
-      dest=transformed_dest,
-      port=ssh_port,
-      recursive=getattr(args, "recursive", False),
-      preserve=getattr(args, "preserve", False),
-      quiet=getattr(args, "quiet", False),
-      private_key_path=priv_key,
-      ssh_config_path=ssh_cfg
-  )
+  use_rsync = getattr(args, "rsync", False) or getattr(args, "command", "") == "rsync"
+  if use_rsync:
+    import shutil
+    if not shutil.which("rsync"):
+      fatal("Host 'rsync' command not found. Please ensure rsync is installed on your system.")
+
+    copy_cmd = build_rsync_cmd(
+        sources=transformed_sources,
+        dest=transformed_dest,
+        port=ssh_port,
+        recursive=getattr(args, "recursive", False),
+        archive=getattr(args, "archive", False),
+        preserve=getattr(args, "preserve", False),
+        compress=getattr(args, "compress", True),
+        delete=getattr(args, "delete", False),
+        exclude=getattr(args, "exclude", None),
+        dry_run=getattr(args, "dry_run", False),
+        quiet=getattr(args, "quiet", False),
+        verbose=getattr(args, "verbose", False),
+        private_key_path=priv_key,
+        ssh_config_path=ssh_cfg
+    )
+    cmd_name = "rsync"
+  else:
+    copy_cmd = build_cp_cmd(
+        sources=transformed_sources,
+        dest=transformed_dest,
+        port=ssh_port,
+        recursive=getattr(args, "recursive", False),
+        preserve=getattr(args, "preserve", False),
+        quiet=getattr(args, "quiet", False),
+        private_key_path=priv_key,
+        ssh_config_path=ssh_cfg
+    )
+    cmd_name = "scp"
 
   try:
-    res = subprocess.run(scp_cmd)
+    res = subprocess.run(copy_cmd)
     if res.returncode != 0:
       sys.exit(res.returncode)
   except FileNotFoundError:
-    fatal("Host 'scp' command not found. Please ensure OpenSSH client is installed on your system.")
+    fatal(f"Host '{cmd_name}' command not found. Please ensure {cmd_name} is installed on your system.")
 
 
 def cmd_ps(args):
@@ -2273,7 +2299,7 @@ def main(args=None):
   )
 
   # Cp Command
-  cp_parser = subparsers.add_parser("cp", help="Copy files or directories between a local path and an XPU instance via SCP")
+  cp_parser = subparsers.add_parser("cp", help="Copy files or directories between a local path and an XPU instance via SCP or Rsync")
   cp_parser.add_argument(
       "-p",
       "--pod",
@@ -2304,6 +2330,62 @@ def main(args=None):
       help="Quiet mode: disables progress meter and non-fatal messages"
   )
   cp_parser.add_argument(
+      "--rsync",
+      "--sync",
+      dest="rsync",
+      action="store_true",
+      help="Use rsync over SSH instead of SCP (faster incremental directory sync and compression)"
+  )
+  cp_parser.add_argument(
+      "-a",
+      "--archive",
+      dest="archive",
+      action="store_true",
+      default=False,
+      help="Archive mode (rsync mode, equals -rlptgoD)"
+  )
+  cp_parser.add_argument(
+      "-z",
+      "--compress",
+      dest="compress",
+      action="store_true",
+      default=True,
+      help="Compress file data during transfer (rsync mode, default: True)"
+  )
+  cp_parser.add_argument(
+      "--no-compress",
+      dest="compress",
+      action="store_false",
+      help="Disable compression during transfer (rsync mode)"
+  )
+  cp_parser.add_argument(
+      "--delete",
+      dest="delete",
+      action="store_true",
+      help="Delete extraneous files from destination (rsync mode)"
+  )
+  cp_parser.add_argument(
+      "--exclude",
+      dest="exclude",
+      action="append",
+      default=[],
+      help="Exclude files matching PATTERN (rsync mode, can be specified multiple times)"
+  )
+  cp_parser.add_argument(
+      "-n",
+      "--dry-run",
+      dest="dry_run",
+      action="store_true",
+      help="Perform a trial run with no changes made (rsync mode)"
+  )
+  cp_parser.add_argument(
+      "-v",
+      "--verbose",
+      dest="verbose",
+      action="store_true",
+      help="Verbose output (rsync mode)"
+  )
+  cp_parser.add_argument(
       "--ssh-private-key-path",
       dest="ssh_private_key_path",
       help="Path to private SSH key (auto-detected if omitted)"
@@ -2318,6 +2400,109 @@ def main(args=None):
       "paths",
       nargs="+",
       help="Source and destination paths (e.g. local_file.txt :/workspace/ or :/workspace/data.csv ./)"
+  )
+
+  # Rsync Command
+  rsync_parser = subparsers.add_parser("rsync", help="Synchronize files or directories between a local path and an XPU instance via rsync over SSH")
+  rsync_parser.add_argument(
+      "-p",
+      "--pod",
+      dest="pod",
+      default=None,
+      help="The ID of the target pod (defaults to last created pod)"
+  )
+  rsync_parser.add_argument(
+      "-a",
+      "--archive",
+      dest="archive",
+      action="store_true",
+      default=True,
+      help="Archive mode (default: True, equals -rlptgoD)"
+  )
+  rsync_parser.add_argument(
+      "--no-archive",
+      dest="archive",
+      action="store_false",
+      help="Disable archive mode"
+  )
+  rsync_parser.add_argument(
+      "-r",
+      "-R",
+      "--recursive",
+      dest="recursive",
+      action="store_true",
+      help="Recursively sync directories"
+  )
+  rsync_parser.add_argument(
+      "-P",
+      "--preserve",
+      dest="preserve",
+      action="store_true",
+      help="Preserve modification times, access times, and modes"
+  )
+  rsync_parser.add_argument(
+      "-z",
+      "--compress",
+      dest="compress",
+      action="store_true",
+      default=True,
+      help="Compress file data during transfer (default: True)"
+  )
+  rsync_parser.add_argument(
+      "--no-compress",
+      dest="compress",
+      action="store_false",
+      help="Disable compression during transfer"
+  )
+  rsync_parser.add_argument(
+      "--delete",
+      dest="delete",
+      action="store_true",
+      help="Delete extraneous files from destination"
+  )
+  rsync_parser.add_argument(
+      "--exclude",
+      dest="exclude",
+      action="append",
+      default=[],
+      help="Exclude files matching PATTERN (can be specified multiple times)"
+  )
+  rsync_parser.add_argument(
+      "-n",
+      "--dry-run",
+      dest="dry_run",
+      action="store_true",
+      help="Perform a trial run with no changes made"
+  )
+  rsync_parser.add_argument(
+      "-q",
+      "--quiet",
+      dest="quiet",
+      action="store_true",
+      help="Quiet mode: disables progress meter and messages"
+  )
+  rsync_parser.add_argument(
+      "-v",
+      "--verbose",
+      dest="verbose",
+      action="store_true",
+      help="Verbose output"
+  )
+  rsync_parser.add_argument(
+      "--ssh-private-key-path",
+      dest="ssh_private_key_path",
+      help="Path to private SSH key (auto-detected if omitted)"
+  )
+  rsync_parser.add_argument(
+      "--ssh-config",
+      dest="ssh_config",
+      default=os.environ.get("RUNPOD_SSH_CONFIG"),
+      help="Path to custom SSH config file (e.g. /dev/null), or RUNPOD_SSH_CONFIG env var"
+  )
+  rsync_parser.add_argument(
+      "paths",
+      nargs="+",
+      help="Source and destination paths (e.g. ./src/ :/workspace/src/ or :/workspace/data/ ./data/)"
   )
 
   # Ps Command
@@ -2591,7 +2776,7 @@ def main(args=None):
     cmd_create(args)
   elif args.command == "run":
     cmd_run(args)
-  elif args.command == "cp":
+  elif args.command in ("cp", "rsync"):
     cmd_cp(args)
   elif args.command == "list":
     cmd_list(args)

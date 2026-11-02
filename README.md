@@ -412,7 +412,9 @@ xpush kill -p <pod-id> -j <job-id-or-pid> [OPTIONS]
 ---
 
 ### 13. `cp`
-Copies files or directories between the local host and an active RunPod instance using `scp`. Supports automatic SSH port and key detection, directory recursion (`-r`), attribute preservation (`-P`), and remote path resolution using `:` or `<pod-id>:`.
+Copies files or directories between the local host and an active instance using `scp` or `rsync`. Supports automatic SSH port and key detection, directory recursion (`-r`), attribute preservation (`-P`), and remote path resolution using `:` or `<pod-id>:`.
+
+Use `xpush rsync` or `xpush cp --rsync` for high-speed incremental synchronization, on-the-wire compression (`-z`), delta-transfers, and exclusion rules (`--exclude`).
 
 Remote paths are distinguished by a colon (`:`):
 * `:/remote/path` — Targets the path on the default pod (or the pod specified by `-p`/`--pod`).
@@ -420,13 +422,22 @@ Remote paths are distinguished by a colon (`:`):
 * Local paths contain no colon.
 
 ```bash
-# Copy local file to the default pod's /workspace
+# High-speed directory synchronization via rsync (archive mode, compressed, incremental):
+xpush rsync ./src/ :/workspace/src/
+
+# Sync with deletion and exclusions:
+xpush rsync --delete --exclude '*.pyc' ./data/ :/workspace/data/
+
+# Or use --rsync with cp:
+xpush cp -r --rsync ./checkpoints/ :/workspace/checkpoints/
+
+# Copy local file to the default pod's /workspace via SCP:
 xpush cp myfile.tar.gz :/workspace/
 
-# Copy a file from a specific pod to the current local directory
+# Copy a file from a specific pod to the current local directory:
 xpush cp <pod-id>:/workspace/results.csv ./
 
-# Recursively copy a remote directory to local
+# Recursively copy a remote directory to local via SCP:
 xpush cp -r :/workspace/checkpoints/ ./checkpoints/
 
 # Copy matching files using remote wildcards (quote to prevent local expansion)
@@ -438,6 +449,12 @@ xpush cp ':/workspace/temp/co*' ./
 | `paths` | *Required* | Source and destination paths (e.g. `local.txt :/workspace/` or `:/workspace/data.csv ./`) |
 | `-p`, `--pod` | *None* | Target pod ID (defaults to last created pod if not specified in path prefix) |
 | `-r`, `-R`, `--recursive` | `False` | Recursively copy entire directories |
+| `--rsync`, `--sync` | `False` | Use rsync over SSH instead of SCP (`cp` command) |
+| `-a`, `--archive` | `True` (for `rsync`) | Archive mode; equals `-rlptgoD` |
+| `-z`, `--compress` | `True` | Compress file data during transfer (rsync mode) |
+| `--delete` | `False` | Delete extraneous files from destination (rsync mode) |
+| `--exclude` | *None* | Exclude files matching pattern (rsync mode, can be repeated) |
+| `-n`, `--dry-run` | `False` | Perform a trial run with no changes made (rsync mode) |
 | `-P`, `--preserve` | `False` | Preserves modification times, access times, and modes from original file |
 | `-q`, `--quiet` | `False` | Quiet mode: disables progress meter and non-fatal messages |
 | `--ssh-private-key-path` | *None* | Path to private SSH key (auto-detected if omitted) |

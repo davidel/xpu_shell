@@ -126,6 +126,72 @@ def build_cp_cmd(
   return cmd
 
 
+def build_rsync_cmd(
+    sources,
+    dest,
+    port,
+    recursive=False,
+    archive=False,
+    preserve=False,
+    compress=True,
+    delete=False,
+    exclude=None,
+    dry_run=False,
+    quiet=False,
+    verbose=False,
+    private_key_path=None,
+    ssh_config_path=None,
+    extra_args=None
+):
+  ssh_opts = ["ssh", "-p", str(port)]
+  cfg = resolve_ssh_config(ssh_config_path)
+  if cfg:
+    ssh_opts.extend(["-F", str(cfg)])
+  ssh_opts.extend(["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"])
+  if private_key_path:
+    ssh_opts.extend(["-i", str(private_key_path)])
+
+  rsh_str = " ".join(shlex.quote(opt) for opt in ssh_opts)
+
+  cmd = ["rsync", "-e", rsh_str]
+  if quiet:
+    cmd.append("-q")
+  elif verbose:
+    cmd.extend(["-v", "--progress"])
+
+  if archive:
+    cmd.append("-a")
+  else:
+    if recursive:
+      cmd.append("-r")
+    if preserve:
+      cmd.append("-p")
+
+  if compress:
+    cmd.append("-z")
+
+  if delete:
+    cmd.append("--delete")
+
+  if dry_run:
+    cmd.append("--dry-run")
+
+  if exclude:
+    if isinstance(exclude, (list, tuple)):
+      for pat in exclude:
+        cmd.extend(["--exclude", str(pat)])
+    else:
+      cmd.extend(["--exclude", str(exclude)])
+
+  if extra_args:
+    cmd.extend(extra_args)
+
+  for s in sources:
+    cmd.append(str(s))
+  cmd.append(str(dest))
+  return cmd
+
+
 def ensure_remote_runner(host, port, private_key_path=None, ssh_config_path=None):
   cache_key = (str(host), int(port))
   if cache_key in _ENSURED_RUNNER_HOSTS:
