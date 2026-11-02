@@ -111,6 +111,14 @@ def normalize_spheron_instance(data: Dict[str, Any]) -> Instance:
   image = data.get("image") or data.get("imageName") or data.get("operatingSystem")
   name = data.get("name") or data.get("label") or f"spheron-{instance_id}"
 
+  uptime = data.get("uptimeSeconds") or data.get("uptime") or data.get("duration")
+  uptime_sec = None
+  if uptime is not None:
+    try:
+      uptime_sec = int(float(uptime))
+    except (ValueError, TypeError):
+      pass
+
   return Instance(
       id=instance_id,
       name=name,
@@ -120,6 +128,7 @@ def normalize_spheron_instance(data: Dict[str, Any]) -> Instance:
       ssh_port=ssh_port,
       gpu_name=gpu_name,
       gpu_count=int(gpu_count),
+      uptime_seconds=uptime_sec,
       cost_per_hr=float(cost) if cost is not None else None,
       vcpu_count=int(vcpu) if vcpu is not None else None,
       memory_gb=mem,

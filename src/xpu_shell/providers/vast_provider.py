@@ -73,8 +73,21 @@ def normalize_vast_instance(data: Dict[str, Any]) -> Instance:
   mem_mb = data.get("cpu_ram")
   mem_gb = float(mem_mb) / 1024.0 if mem_mb is not None else None
   disk = data.get("disk_space")
-  image = data.get("image")
+  image = data.get("image") or data.get("image_uuid") or data.get("image_name")
   label = data.get("label") or f"vast-{instance_id}"
+
+  duration = data.get("duration")
+  uptime_sec = None
+  if duration is not None:
+    try:
+      uptime_sec = int(float(duration))
+    except (ValueError, TypeError):
+      pass
+  elif data.get("uptime_mins"):
+    try:
+      uptime_sec = int(float(data.get("uptime_mins")) * 60)
+    except (ValueError, TypeError):
+      pass
 
   return Instance(
       id=instance_id,
@@ -85,6 +98,7 @@ def normalize_vast_instance(data: Dict[str, Any]) -> Instance:
       ssh_port=ssh_port,
       gpu_name=gpu_name,
       gpu_count=int(gpu_count),
+      uptime_seconds=uptime_sec,
       cost_per_hr=float(cost) if cost is not None else None,
       vcpu_count=int(vcpu) if vcpu is not None else None,
       memory_gb=mem_gb,

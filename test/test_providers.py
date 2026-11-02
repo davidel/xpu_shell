@@ -420,6 +420,73 @@ class TestVastCLIIntegration(unittest.TestCase):
     self.assertEqual(mock_exec.call_args[1]["port"], 2222)
 
   @patch("xpu_shell.cli.resolve_provider")
+  def test_vast_cli_info(self, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "vast"
+    mock_prov.get_instance.return_value = Instance(
+        id="58842137",
+        name="vast-58842137",
+        provider="vast",
+        status="RUNNING",
+        ssh_host="ssh2.vast.ai",
+        ssh_port=22516,
+        gpu_name="RTX 4090",
+        gpu_count=1,
+        uptime_seconds=3600,
+        cost_per_hr=0.54,
+        vcpu_count=32,
+        memory_gb=108.0,
+        disk_gb=80.0,
+        image_name="pytorch/pytorch:latest",
+        raw={
+            "id": 58842137,
+            "actual_status": "running",
+            "geolocation": "California, US",
+            "cpu_name": "AMD EPYC 9684X",
+            "cpu_util": 5.0,
+            "mem_usage": 10.0,
+            "gpu_util": 80.0,
+            "vmem_usage": 45.0
+        }
+    )
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "info", "-p", "58842137"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    mock_prov.get_instance.assert_called_once_with("58842137")
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("vast-58842137 (58842137)", output)
+    self.assertIn("RUNNING", output)
+    self.assertIn("1x RTX 4090", output)
+    self.assertIn("ssh2.vast.ai:22516", output)
+    self.assertIn("California, US", output)
+
+  @patch("xpu_shell.cli.resolve_provider")
+  def test_vast_cli_info_json(self, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "vast"
+    mock_prov.get_instance.return_value = Instance(
+        id="58842137",
+        name="vast-58842137",
+        provider="vast",
+        status="RUNNING",
+        raw={"id": 58842137, "status": "running"}
+    )
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "info", "--json", "58842137"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    mock_prov.get_instance.assert_called_once_with("58842137")
+    mock_print.assert_called_once()
+    self.assertIn('"id": 58842137', mock_print.call_args[0][0])
+
+  @patch("xpu_shell.cli.resolve_provider")
   @patch("sys.stdout")
   def test_vast_cli_gpus(self, mock_stdout, mock_resolve_prov):
     mock_prov = MagicMock()
@@ -1014,4 +1081,62 @@ class TestSpheronProvider(unittest.TestCase):
     mock_create_inst.assert_called_once()
     self.assertEqual(mock_create_inst.call_args[1]["ssh_key_id"], "spheron-key-999")
     self.assertIsNone(mock_create_inst.call_args[1]["image_name"])
+
+  @patch("xpu_shell.cli.resolve_provider")
+  def test_spheron_cli_info(self, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "spheron"
+    mock_prov.get_instance.return_value = Instance(
+        id="spheron-auto-1",
+        name="test-worker",
+        provider="spheron",
+        status="RUNNING",
+        ssh_host="ssh.spheron.ai",
+        ssh_port=22,
+        gpu_name="RTX 4090",
+        gpu_count=1,
+        uptime_seconds=1800,
+        cost_per_hr=0.42,
+        vcpu_count=8,
+        memory_gb=32.0,
+        disk_gb=100.0,
+        image_name="ubuntu:22.04",
+        raw={"region": "us-east-1"}
+    )
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "--provider", "spheron", "--api-key", "fake-key", "info", "-p", "spheron-auto-1"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    mock_prov.get_instance.assert_called_once_with("spheron-auto-1")
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("test-worker (spheron-auto-1)", output)
+    self.assertIn("RUNNING", output)
+    self.assertIn("1x RTX 4090", output)
+    self.assertIn("ssh.spheron.ai:22", output)
+    self.assertIn("us-east-1", output)
+
+  @patch("xpu_shell.cli.resolve_provider")
+  def test_spheron_cli_info_json(self, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "spheron"
+    mock_prov.get_instance.return_value = Instance(
+        id="spheron-auto-1",
+        name="test-worker",
+        provider="spheron",
+        status="RUNNING",
+        raw={"deploymentId": "spheron-auto-1", "state": "running"}
+    )
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "--provider", "spheron", "--api-key", "fake-key", "info", "--json", "spheron-auto-1"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    mock_prov.get_instance.assert_called_once_with("spheron-auto-1")
+    mock_print.assert_called_once()
+    self.assertIn('"deploymentId": "spheron-auto-1"', mock_print.call_args[0][0])
 

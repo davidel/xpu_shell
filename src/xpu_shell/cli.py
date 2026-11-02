@@ -1,5 +1,7 @@
 import argparse
 import base64
+from dataclasses import asdict
+from datetime import datetime, timezone
 import difflib
 import os
 from pathlib import Path
@@ -1377,138 +1379,303 @@ def get_detailed_pod(pod_id):
 
 def cmd_info(args):
   target_pod_id = resolve_pod_id(args)
-  pod_info = get_detailed_pod(target_pod_id)
+  provider = resolve_provider(args=args, instance_id=target_pod_id)
 
-  if not pod_info:
-    fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
+  if provider.name == "runpod":
+    pod_info = get_detailed_pod(target_pod_id)
 
-  save_last_pod_id(target_pod_id)
+    if not pod_info:
+      fatal(f"Pod '{target_pod_id}' not found.", FileNotFoundError)
 
-  if getattr(args, "json_output", False):
-    import json
-    print(json.dumps(pod_info, indent=2))
-    return
+    save_last_pod_id(target_pod_id, provider="runpod")
 
-  name = pod_info.get("name") or "N/A"
-  status = pod_info.get("desiredStatus") or pod_info.get("status") or "N/A"
-  pod_type = pod_info.get("podType") or "N/A"
-  cost = pod_info.get("costPerHr")
-  cost_str = f"${cost:.2f} / hr" if isinstance(cost, (int, float)) else "N/A"
+    if getattr(args, "json_output", False):
+      import json
+      print(json.dumps(pod_info, indent=2))
+      return
 
-  runtime = pod_info.get("runtime") or {}
-  uptime_sec = runtime.get("uptimeInSeconds")
-  if uptime_sec is None or uptime_sec == 0:
-    uptime_sec = pod_info.get("uptimeSeconds")
-  uptime_str = format_uptime(uptime_sec)
+    name = pod_info.get("name") or "N/A"
+    status = pod_info.get("desiredStatus") or pod_info.get("status") or "N/A"
+    pod_type = pod_info.get("podType") or "N/A"
+    cost = pod_info.get("costPerHr")
+    cost_str = f"${cost:.2f} / hr" if isinstance(cost, (int, float)) else "N/A"
 
-  created_at = pod_info.get("createdAt") or pod_info.get("lastStatusChange") or ""
-  if created_at and "T" in created_at:
-    created_display = created_at.replace("T", " ").split(".")[0] + " UTC"
-  else:
-    created_display = created_at
+    runtime = pod_info.get("runtime") or {}
+    uptime_sec = runtime.get("uptimeInSeconds")
+    if uptime_sec is None or uptime_sec == 0:
+      uptime_sec = pod_info.get("uptimeSeconds")
+    uptime_str = format_uptime(uptime_sec)
 
-  machine = pod_info.get("machine") or {}
-  location = machine.get("location")
-  datacenter = machine.get("dataCenterId")
-  loc_str = datacenter if datacenter else (location if location else "N/A")
-  if datacenter and location and datacenter != location:
-    loc_str = f"{datacenter} ({location})"
-
-  gpu_count = pod_info.get("gpuCount", 0)
-  gpu_name = (
-      machine.get("gpuDisplayName")
-      or pod_info.get("gpuDisplayName")
-      or pod_info.get("gpuName")
-      or machine.get("gpuTypeId")
-      or "GPU"
-  )
-  gpu_type_id = machine.get("gpuTypeId") or pod_info.get("gpuTypeId") or ""
-
-  vram_map = get_gpu_vram_map()
-  vram_per_gpu = vram_map.get(gpu_type_id.lower()) or vram_map.get(gpu_name.lower())
-
-  if gpu_count > 0:
-    if vram_per_gpu:
-      total_vram = vram_per_gpu * gpu_count
-      if gpu_count == 1:
-        gpu_display = f"1x {gpu_name} ({vram_per_gpu} GB VRAM)"
-      else:
-        gpu_display = f"{gpu_count}x {gpu_name} ({vram_per_gpu} GB each, {total_vram} GB total VRAM)"
+    created_at = pod_info.get("createdAt") or pod_info.get("lastStatusChange") or ""
+    if created_at and "T" in created_at:
+      created_display = created_at.replace("T", " ").split(".")[0] + " UTC"
     else:
-      gpu_display = f"{gpu_count}x {gpu_name}"
-  else:
-    gpu_display = "CPU only (no dedicated GPU)"
+      created_display = created_at
 
-  vcpu = pod_info.get("vcpuCount")
-  vcpu_str = f"{vcpu} vCPUs" if vcpu else "N/A"
+    machine = pod_info.get("machine") or {}
+    location = machine.get("location")
+    datacenter = machine.get("dataCenterId")
+    loc_str = datacenter if datacenter else (location if location else "N/A")
+    if datacenter and location and datacenter != location:
+      loc_str = f"{datacenter} ({location})"
 
-  ram = pod_info.get("memoryInGb")
-  ram_str = f"{ram} GB" if ram else "N/A"
+    gpu_count = pod_info.get("gpuCount", 0)
+    gpu_name = (
+        machine.get("gpuDisplayName")
+        or pod_info.get("gpuDisplayName")
+        or pod_info.get("gpuName")
+        or machine.get("gpuTypeId")
+        or "GPU"
+    )
+    gpu_type_id = machine.get("gpuTypeId") or pod_info.get("gpuTypeId") or ""
 
-  c_disk = pod_info.get("containerDiskInGb")
-  c_disk_str = f"{c_disk} GB" if c_disk else "N/A"
+    vram_map = get_gpu_vram_map()
+    vram_per_gpu = vram_map.get(gpu_type_id.lower()) or vram_map.get(gpu_name.lower())
 
-  v_disk = pod_info.get("volumeInGb")
-  v_mount = pod_info.get("volumeMountPath") or "/workspace"
-  v_disk_str = f"{v_disk} GB (mounted at {v_mount})" if v_disk else "None"
+    if gpu_count > 0:
+      if vram_per_gpu:
+        total_vram = vram_per_gpu * gpu_count
+        if gpu_count == 1:
+          gpu_display = f"1x {gpu_name} ({vram_per_gpu} GB VRAM)"
+        else:
+          gpu_display = f"{gpu_count}x {gpu_name} ({vram_per_gpu} GB each, {total_vram} GB total VRAM)"
+      else:
+        gpu_display = f"{gpu_count}x {gpu_name}"
+    else:
+      gpu_display = "CPU only (no dedicated GPU)"
 
-  container_stats = runtime.get("container") or {}
-  cpu_pct = container_stats.get("cpuPercent")
-  mem_pct = container_stats.get("memoryPercent")
-  runtime_gpus = runtime.get("gpus") or []
-  gpu_pct = None
-  gpu_mem_pct = None
-  if runtime_gpus and isinstance(runtime_gpus, list):
-    gpu_pct = runtime_gpus[0].get("gpuUtilPercent")
-    gpu_mem_pct = runtime_gpus[0].get("memoryUtilPercent")
+    vcpu = pod_info.get("vcpuCount")
+    vcpu_str = f"{vcpu} vCPUs" if vcpu else "N/A"
 
-  host, port = get_pod_ssh_endpoint(pod_info)
-  if host and port and port != "unknown":
-    ssh_endpoint = f"{host}:{port}"
-    ssh_cmd = f"ssh -p {port} root@{host}"
-  else:
-    ssh_endpoint = "N/A"
-    ssh_cmd = "N/A"
+    ram = pod_info.get("memoryInGb")
+    ram_str = f"{ram} GB" if ram else "N/A"
 
-  image = pod_info.get("imageName") or "N/A"
+    c_disk = pod_info.get("containerDiskInGb")
+    c_disk_str = f"{c_disk} GB" if c_disk else "N/A"
 
-  print("=" * 80)
-  print(f"Pod Information: {name} ({target_pod_id})")
-  print("=" * 80)
-  print(f"Status:         {status} ({pod_type})")
-  if created_display:
-    print(f"Uptime:         {uptime_str} (created: {created_display})")
-  else:
-    print(f"Uptime:         {uptime_str}")
-  print(f"Cost:           {cost_str}")
-  print(f"Datacenter:     {loc_str}")
-  print()
-  print("-- Hardware & Resources " + "-" * 56)
-  print(f"GPU:            {gpu_display}")
-  print(f"CPU:            {vcpu_str}")
-  print(f"Memory (RAM):   {ram_str}")
-  print(f"Container Disk: {c_disk_str}")
-  print(f"Network Volume: {v_disk_str}")
+    v_disk = pod_info.get("volumeInGb")
+    v_mount = pod_info.get("volumeMountPath") or "/workspace"
+    v_disk_str = f"{v_disk} GB (mounted at {v_mount})" if v_disk else "None"
 
-  has_live_metrics = (cpu_pct is not None or mem_pct is not None or gpu_pct is not None or gpu_mem_pct is not None)
-  if has_live_metrics:
+    container_stats = runtime.get("container") or {}
+    cpu_pct = container_stats.get("cpuPercent")
+    mem_pct = container_stats.get("memoryPercent")
+    runtime_gpus = runtime.get("gpus") or []
+    gpu_pct = None
+    gpu_mem_pct = None
+    if runtime_gpus and isinstance(runtime_gpus, list):
+      gpu_pct = runtime_gpus[0].get("gpuUtilPercent")
+      gpu_mem_pct = runtime_gpus[0].get("memoryUtilPercent")
+
+    host, port = get_pod_ssh_endpoint(pod_info)
+    if host and port and port != "unknown":
+      ssh_endpoint = f"{host}:{port}"
+      ssh_cmd = f"ssh -p {port} root@{host}"
+    else:
+      ssh_endpoint = "N/A"
+      ssh_cmd = "N/A"
+
+    image = pod_info.get("imageName") or "N/A"
+
+    print("=" * 80)
+    print(f"Pod Information: {name} ({target_pod_id})")
+    print("=" * 80)
+    print(f"Status:         {status} ({pod_type})")
+    if created_display:
+      print(f"Uptime:         {uptime_str} (created: {created_display})")
+    else:
+      print(f"Uptime:         {uptime_str}")
+    print(f"Cost:           {cost_str}")
+    print(f"Datacenter:     {loc_str}")
     print()
-    print("-- Live Utilization " + "-" * 60)
-    if cpu_pct is not None:
-      print(f"CPU Usage:      {cpu_pct}%")
-    if mem_pct is not None:
-      print(f"RAM Usage:      {mem_pct}%")
-    if gpu_pct is not None:
-      print(f"GPU Compute:    {gpu_pct}%")
-    if gpu_mem_pct is not None:
-      print(f"GPU VRAM:       {gpu_mem_pct}%")
+    print("-- Hardware & Resources " + "-" * 56)
+    print(f"GPU:            {gpu_display}")
+    print(f"CPU:            {vcpu_str}")
+    print(f"Memory (RAM):   {ram_str}")
+    print(f"Container Disk: {c_disk_str}")
+    print(f"Network Volume: {v_disk_str}")
 
-  print()
-  print("-- Network & Access " + "-" * 60)
-  print(f"SSH Endpoint:   {ssh_endpoint}")
-  print(f"SSH Command:    {ssh_cmd}")
-  print(f"Docker Image:   {image}")
-  print("=" * 80)
+    has_live_metrics = (cpu_pct is not None or mem_pct is not None or gpu_pct is not None or gpu_mem_pct is not None)
+    if has_live_metrics:
+      print()
+      print("-- Live Utilization " + "-" * 60)
+      if cpu_pct is not None:
+        print(f"CPU Usage:      {cpu_pct}%")
+      if mem_pct is not None:
+        print(f"RAM Usage:      {mem_pct}%")
+      if gpu_pct is not None:
+        print(f"GPU Compute:    {gpu_pct}%")
+      if gpu_mem_pct is not None:
+        print(f"GPU VRAM:       {gpu_mem_pct}%")
+
+    print()
+    print("-- Network & Access " + "-" * 60)
+    print(f"SSH Endpoint:   {ssh_endpoint}")
+    print(f"SSH Command:    {ssh_cmd}")
+    print(f"Docker Image:   {image}")
+    print("=" * 80)
+  else:
+    try:
+      inst = provider.get_instance(target_pod_id)
+    except Exception as e:
+      fatal(f"Instance '{target_pod_id}' not found: {e}", exc=e.__class__)
+
+    if not inst:
+      fatal(f"Instance '{target_pod_id}' not found.", FileNotFoundError)
+
+    save_last_pod_id(target_pod_id, provider=provider.name)
+
+    raw_data = inst.raw if (inst.raw and isinstance(inst.raw, dict)) else asdict(inst)
+
+    if getattr(args, "json_output", False):
+      import json
+      print(json.dumps(raw_data, indent=2))
+      return
+
+    name = inst.name or f"{provider.name}-{target_pod_id}"
+    status = inst.status or "UNKNOWN"
+    raw = inst.raw if isinstance(inst.raw, dict) else {}
+    pod_type = (
+        raw.get("podType")
+        or ("INTERRUPTIBLE" if raw.get("is_bid") else "ON-DEMAND" if "is_bid" in raw else None)
+        or raw.get("type")
+        or provider.name.upper()
+    )
+
+    cost = inst.cost_per_hr
+    cost_str = f"${cost:.2f} / hr" if isinstance(cost, (int, float)) else "N/A"
+
+    uptime_sec = inst.uptime_seconds
+    if uptime_sec is None:
+      duration = raw.get("duration")
+      if duration is not None:
+        try:
+          uptime_sec = int(float(duration))
+        except (ValueError, TypeError):
+          pass
+      elif raw.get("uptime_mins"):
+        try:
+          uptime_sec = int(float(raw.get("uptime_mins")) * 60)
+        except (ValueError, TypeError):
+          pass
+    uptime_str = format_uptime(uptime_sec)
+
+    created_at = raw.get("createdAt") or raw.get("created_at") or raw.get("start_date") or ""
+    created_display = ""
+    if isinstance(created_at, (int, float)):
+      try:
+        created_display = datetime.fromtimestamp(created_at, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+      except Exception:
+        created_display = str(created_at)
+    elif isinstance(created_at, str) and created_at:
+      if "T" in created_at:
+        created_display = created_at.replace("T", " ").split(".")[0] + " UTC"
+      else:
+        created_display = created_at
+
+    location = raw.get("geolocation") or raw.get("datacenter") or raw.get("region") or raw.get("location") or "N/A"
+
+    gpu_count = inst.gpu_count or 0
+    gpu_name = inst.gpu_name or raw.get("gpu_name") or raw.get("gpuType") or "GPU"
+    vram_map = get_gpu_vram_map()
+    vram_per_gpu = vram_map.get(gpu_name.lower())
+    if not vram_per_gpu:
+      gpu_ram = raw.get("gpu_ram") or raw.get("memoryInGb") or raw.get("gpu_memory")
+      if gpu_ram is not None:
+        try:
+          ram_val = float(gpu_ram)
+          vram_per_gpu = round(ram_val / 1024) if ram_val > 256 else round(ram_val)
+        except (ValueError, TypeError):
+          pass
+
+    if gpu_count > 0:
+      if vram_per_gpu:
+        total_vram = vram_per_gpu * gpu_count
+        if gpu_count == 1:
+          gpu_display = f"1x {gpu_name} ({vram_per_gpu} GB VRAM)"
+        else:
+          gpu_display = f"{gpu_count}x {gpu_name} ({vram_per_gpu} GB each, {total_vram} GB total VRAM)"
+      else:
+        gpu_display = f"{gpu_count}x {gpu_name}"
+    else:
+      gpu_display = "CPU only (no dedicated GPU)"
+
+    vcpu = inst.vcpu_count or raw.get("cpu_cores") or raw.get("vcpu")
+    cpu_name = raw.get("cpu_name")
+    if cpu_name and vcpu:
+      vcpu_str = f"{vcpu} vCPUs ({cpu_name})"
+    elif vcpu:
+      vcpu_str = f"{vcpu} vCPUs"
+    else:
+      vcpu_str = "N/A"
+
+    ram = inst.memory_gb
+    if ram is not None:
+      ram_str = f"{ram:.1f} GB" if isinstance(ram, float) and not ram.is_integer() else f"{int(ram)} GB"
+    else:
+      ram_str = "N/A"
+
+    disk = inst.disk_gb
+    if disk is not None:
+      disk_str = f"{disk:.1f} GB" if isinstance(disk, float) and not disk.is_integer() else f"{int(disk)} GB"
+    else:
+      disk_str = "N/A"
+
+    v_disk_str = "None"
+
+    cpu_pct = raw.get("cpu_util")
+    mem_pct = raw.get("mem_usage") or raw.get("mem_util")
+    gpu_pct = raw.get("gpu_util")
+    gpu_mem_pct = raw.get("vmem_usage") or raw.get("vram_usage") or raw.get("gpu_mem_util")
+
+    ssh_host = inst.ssh_host
+    ssh_port = inst.ssh_port
+    if ssh_host and ssh_port and ssh_port != "unknown":
+      ssh_endpoint = f"{ssh_host}:{ssh_port}"
+      ssh_cmd = f"ssh -p {ssh_port} root@{ssh_host}"
+    else:
+      ssh_endpoint = "N/A"
+      ssh_cmd = "N/A"
+
+    image = inst.image_name or raw.get("image_uuid") or raw.get("image") or "N/A"
+
+    print("=" * 80)
+    print(f"Pod Information: {name} ({target_pod_id})")
+    print("=" * 80)
+    print(f"Status:         {status} ({pod_type})")
+    if created_display:
+      print(f"Uptime:         {uptime_str} (created: {created_display})")
+    else:
+      print(f"Uptime:         {uptime_str}")
+    print(f"Cost:           {cost_str}")
+    print(f"Datacenter:     {location}")
+    print()
+    print("-- Hardware & Resources " + "-" * 56)
+    print(f"GPU:            {gpu_display}")
+    print(f"CPU:            {vcpu_str}")
+    print(f"Memory (RAM):   {ram_str}")
+    print(f"Container Disk: {disk_str}")
+    print(f"Network Volume: {v_disk_str}")
+
+    has_live_metrics = (cpu_pct is not None or mem_pct is not None or gpu_pct is not None or gpu_mem_pct is not None)
+    if has_live_metrics:
+      print()
+      print("-- Live Utilization " + "-" * 60)
+      if cpu_pct is not None:
+        print(f"CPU Usage:      {cpu_pct}%")
+      if mem_pct is not None:
+        print(f"RAM Usage:      {mem_pct}%")
+      if gpu_pct is not None:
+        print(f"GPU Compute:    {gpu_pct}%")
+      if gpu_mem_pct is not None:
+        print(f"GPU VRAM:       {gpu_mem_pct}%")
+
+    print()
+    print("-- Network & Access " + "-" * 60)
+    print(f"SSH Endpoint:   {ssh_endpoint}")
+    print(f"SSH Command:    {ssh_cmd}")
+    print(f"Docker Image:   {image}")
+    print("=" * 80)
 
 
 def cmd_stop(args):
