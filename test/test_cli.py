@@ -757,6 +757,86 @@ class TestRunPodShellCLI(unittest.TestCase):
     self.assertEqual(kwargs["template_id"], "runpod-torch-v280")
     self.assertEqual(kwargs["image_name"], "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404")
 
+  @patch("subprocess.run")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("xpu_shell.cli.get_ssh_key")
+  @patch("xpu_shell.cli.read_requirements")
+  @patch("xpu_shell.cli.read_apt_packages_file")
+  @patch("runpod.create_pod")
+  @patch("runpod.get_pod")
+  @patch("time.sleep")
+  def test_create_with_template_image_flag(self, mock_sleep, mock_get_pod, mock_create_pod, mock_apt_file, mock_req, mock_ssh_key, mock_find_priv, mock_wait_ssh, mock_sub_run):
+    mock_ssh_key.return_value = "ssh-rsa fake_public_key"
+    mock_req.return_value = ""
+    mock_apt_file.return_value = []
+    mock_find_priv.return_value = "/fake/key"
+    mock_create_pod.return_value = {"id": "pod-img-123"}
+    mock_get_pod.return_value = {
+        "id": "pod-img-123",
+        "desiredStatus": "RUNNING",
+        "runtime": {"ports": [{"ip": "1.2.3.4", "privatePort": 22, "publicPort": 1234}]}
+    }
+    mock_wait_ssh.return_value = True
+
+    test_args = [
+        "cli.py",
+        "--api-key", "fake-api-key",
+        "create",
+        "--name", "test-img-worker",
+        "--template", "image:pytorch/pytorch:latest"
+    ]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    kwargs = mock_create_pod.call_args[1]
+    self.assertEqual(kwargs["name"], "test-img-worker")
+    self.assertEqual(kwargs["image_name"], "pytorch/pytorch:latest")
+    self.assertNotIn("template_id", kwargs)
+
+  @patch("subprocess.run")
+  @patch("xpu_shell.cli.get_pod_template")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("xpu_shell.cli.get_ssh_key")
+  @patch("xpu_shell.cli.read_requirements")
+  @patch("xpu_shell.cli.read_apt_packages_file")
+  @patch("runpod.create_pod")
+  @patch("runpod.get_pod")
+  @patch("time.sleep")
+  def test_create_with_template_template_flag(self, mock_sleep, mock_get_pod, mock_create_pod, mock_apt_file, mock_req, mock_ssh_key, mock_find_priv, mock_wait_ssh, mock_get_template, mock_sub_run):
+    mock_ssh_key.return_value = "ssh-rsa fake_public_key"
+    mock_req.return_value = ""
+    mock_apt_file.return_value = []
+    mock_find_priv.return_value = "/fake/key"
+    mock_create_pod.return_value = {"id": "pod-tpl-123"}
+    mock_get_pod.return_value = {
+        "id": "pod-tpl-123",
+        "desiredStatus": "RUNNING",
+        "runtime": {"ports": [{"ip": "1.2.3.4", "privatePort": 22, "publicPort": 1234}]}
+    }
+    mock_wait_ssh.return_value = True
+    mock_get_template.return_value = {
+        "id": "my-template-id",
+        "name": "My Template",
+        "imageName": "my-image:latest"
+    }
+
+    test_args = [
+        "cli.py",
+        "--api-key", "fake-api-key",
+        "create",
+        "--name", "test-tpl-worker",
+        "--template", "template:my-template-id"
+    ]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    kwargs = mock_create_pod.call_args[1]
+    self.assertEqual(kwargs["name"], "test-tpl-worker")
+    self.assertEqual(kwargs["template_id"], "my-template-id")
+    self.assertEqual(kwargs["image_name"], "my-image:latest")
+
   @patch("xpu_shell.cli.get_pod_template")
   @patch("xpu_shell.cli.get_ssh_key")
   @patch("xpu_shell.cli.read_requirements")

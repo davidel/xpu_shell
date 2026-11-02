@@ -4,7 +4,13 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 import requests
 
-from xpu_shell.providers.base import BaseProvider, Instance
+from xpu_shell.providers.base import (
+    BaseProvider,
+    Instance,
+    Template,
+    format_template_identifier,
+    parse_template_identifier
+)
 
 
 SPHERON_API_BASE = "https://app.spheron.ai"
@@ -374,6 +380,7 @@ class SpheronProvider(BaseProvider):
       name: str = "persistent-worker",
       gpu_name: Optional[str] = None,
       image_name: Optional[str] = None,
+      template: Optional[str] = None,
       disk_gb: float = 50.0,
       env: Optional[Dict[str, str]] = None,
       offer_id: Optional[str] = None,
@@ -383,6 +390,10 @@ class SpheronProvider(BaseProvider):
       gpu_count: int = 1,
       **kwargs
   ) -> Instance:
+    if template:
+      kind, val = parse_template_identifier(template)
+      image_name = val
+
     target_offer_id = offer_id
     target_gpu_type = gpu_name
 
@@ -509,3 +520,27 @@ class SpheronProvider(BaseProvider):
           if regex.search(g.get("displayName", "")) or regex.search(g.get("id", ""))
       ]
     return result
+
+  def list_templates(self, filter_pattern: Optional[str] = None) -> List[Template]:
+    os_list = [
+        ("ubuntu-22.04", "Ubuntu 22.04 LTS (Jammy Jellyfish)"),
+        ("ubuntu-20.04", "Ubuntu 20.04 LTS (Focal Fossa)"),
+        ("debian-12", "Debian 12 (Bookworm)"),
+    ]
+    templates = [
+        Template(
+            id=format_template_identifier("image", os_name),
+            name=desc,
+            provider="spheron",
+            type="image",
+            image_name=os_name
+        )
+        for os_name, desc in os_list
+    ]
+    if filter_pattern:
+      regex = re.compile(filter_pattern, re.IGNORECASE)
+      templates = [
+          t for t in templates
+          if regex.search(t.id) or regex.search(t.name) or regex.search(t.image_name or "")
+      ]
+    return templates

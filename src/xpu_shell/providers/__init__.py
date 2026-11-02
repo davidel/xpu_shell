@@ -2,7 +2,13 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple
 
-from xpu_shell.providers.base import BaseProvider, Instance
+from xpu_shell.providers.base import (
+    BaseProvider,
+    Instance,
+    Template,
+    parse_template_identifier,
+    format_template_identifier
+)
 from xpu_shell.providers.runpod_provider import RunPodProvider
 from xpu_shell.providers.vast_provider import VastProvider
 from xpu_shell.providers.spheron_provider import SpheronProvider

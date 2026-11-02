@@ -28,7 +28,9 @@ from xpu_shell.providers import (
     resolve_provider,
     save_last_provider,
     get_last_provider,
-    parse_instance_identifier
+    parse_instance_identifier,
+    parse_template_identifier,
+    format_template_identifier
 )
 
 
@@ -591,8 +593,23 @@ def cmd_create(args):
   container_env["PUBLIC_KEY"] = ssh_public_key
 
   provider = resolve_provider(args=args)
-  template_id = getattr(args, "template_id", None)
-  image_name = getattr(args, "image_name", None)
+  raw_template = getattr(args, "template", None)
+  raw_template_id = getattr(args, "template_id", None)
+  raw_image_name = getattr(args, "image_name", None)
+
+  template_id = None
+  image_name = None
+
+  if raw_template:
+    kind, val = parse_template_identifier(raw_template)
+    if kind == "image":
+      image_name = val
+    elif kind == "template":
+      template_id = val
+  elif raw_template_id:
+    template_id = raw_template_id
+  elif raw_image_name:
+    image_name = raw_image_name
 
   if provider.name == "vast":
     print(f"Launching Vast.ai instance '{args.name}'...")
@@ -601,6 +618,7 @@ def cmd_create(args):
       inst = provider.create_instance(
           gpu_name=args.gpu_type,
           image_name=image_name,
+          template_id=template_id,
           disk_gb=disk_total,
           env=container_env,
           offer_id=getattr(args, "offer_id", None),
@@ -1685,36 +1703,49 @@ def get_pod_templates():
 
 
 def cmd_templates(args):
-  print("Fetching available pod templates...")
-  templates = get_pod_templates()
-
-  if not templates:
-    print("No templates found.")
-    return
+  provider = resolve_provider(args=args)
+  prov_label = provider.name.capitalize() if provider.name != "vast" else "Vast.ai"
+  print(f"Fetching available templates and images on {prov_label}...")
 
   filter_pattern = getattr(args, "regex_filter", None) or getattr(args, "filter", None)
   if filter_pattern:
     try:
-      regex = re.compile(filter_pattern, re.IGNORECASE)
+      re.compile(filter_pattern, re.IGNORECASE)
     except re.error as e:
       fatal(f"Invalid regex pattern '{filter_pattern}': {e}", ValueError)
 
-    templates = [
-        t for t in templates
-        if regex.search(t.get("id") or "") or regex.search(t.get("name") or "") or regex.search(t.get("imageName") or "")
-    ]
+  try:
+    templates = provider.list_templates(filter_pattern=filter_pattern)
+  except Exception as e:
+    fatal(f"Failed to retrieve templates: {e}", exc=e.__class__)
 
-    if not templates:
+  if not templates:
+    if filter_pattern:
       print(f"No templates matching pattern '{filter_pattern}' found.")
-      return
+    else:
+      print("No templates found.")
+    return
 
-  print(f"{'TEMPLATE ID':<26} | {'NAME':<35} | {'IMAGE NAME'}")
-  print("-" * 110)
-  for t in templates:
-    t_id = t.get("id", "N/A")
-    name = t.get("name", "N/A")
-    image = t.get("imageName", "N/A")
-    print(f"{t_id:<26} | {name:<35} | {image}")
+  print(f"{'TEMPLATE ID':<35} | {'TYPE':<10} | {'NAME':<32} | {'BASE IMAGE / OS'}")
+  print("-" * 115)
+  try:
+    for t in templates:
+      if hasattr(t, "id"):
+        t_id = t.id
+        t_type = getattr(t, "type", "template")
+        name = (t.name[:32] if t.name else "N/A")
+        img = getattr(t, "image_name", None) or "N/A"
+      elif isinstance(t, dict):
+        raw_id = t.get("id", "N/A")
+        t_type = t.get("type", "template")
+        t_id = format_template_identifier(t_type, raw_id) if ":" not in str(raw_id) else raw_id
+        name = (t.get("name") or "N/A")[:32]
+        img = t.get("imageName") or t.get("image") or "N/A"
+      else:
+        continue
+      print(f"{t_id:<35} | {t_type:<10} | {name:<32} | {img}")
+  except BrokenPipeError:
+    pass
 
 
 def main(args=None):
@@ -1761,6 +1792,12 @@ def main(args=None):
 
   # Create Command
   create_parser = subparsers.add_parser("create", help="Create and launch a new instance")
+  create_parser.add_argument(
+      "-t",
+      "--template",
+      default=None,
+      help="Template or image identifier (e.g. 'template:<id>' or 'image:<name>')."
+  )
   create_parser.add_argument(
       "--provider",
       help="Target provider ('runpod', 'vast', or 'spheron'). Default: auto-detect or runpod.",
@@ -2342,6 +2379,23 @@ def main(args=None):
       dest="expand",
       default=False,
       help="Expand list to show individual marketplace offerings (e.g. for Vast.ai)"
+  )
+
+  # Templates Command
+  templates_parser = subparsers.add_parser("templates", help="List available templates and images on XPU")
+  templates_parser.add_argument(
+      "filter",
+      nargs="?",
+      default=None,
+      help="Optional regex pattern to filter templates by ID, Name, or Image (case-insensitive)"
+  )
+  templates_parser.add_argument(
+      "-r",
+      "--regex",
+      "--filter",
+      dest="regex_filter",
+      default=None,
+      help="Optional regex pattern to filter templates by ID, Name, or Image (case-insensitive)"
   )
 
   args = parser.parse_args(raw_args)

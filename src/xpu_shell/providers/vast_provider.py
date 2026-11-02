@@ -1,10 +1,17 @@
+import json
 import os
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple
 import requests
 
-from xpu_shell.providers.base import BaseProvider, Instance
+from xpu_shell.providers.base import (
+    BaseProvider,
+    Instance,
+    Template,
+    format_template_identifier,
+    parse_template_identifier
+)
 
 
 VAST_API_BASE = "https://console.vast.ai/api/v0"
@@ -190,7 +197,11 @@ class VastProvider(BaseProvider):
       min_reliability: float = 0.90,
       verified_only: bool = False
   ) -> List[Dict[str, Any]]:
-    params = {}
+    query: Dict[str, Any] = {
+        "rentable": {"eq": True},
+        "rented": {"eq": False}
+    }
+    params = {"q": json.dumps(query)}
     data = self._request("GET", "/bundles/", params=params)
     offers = data.get("offers", []) if isinstance(data, dict) else data
     if not isinstance(offers, list):
@@ -222,6 +233,8 @@ class VastProvider(BaseProvider):
       self,
       gpu_name: Optional[str] = None,
       image_name: Optional[str] = None,
+      template: Optional[str] = None,
+      template_id: Optional[str] = None,
       disk_gb: float = 50.0,
       env: Optional[Dict[str, str]] = None,
       offer_id: Optional[int] = None,
@@ -229,6 +242,13 @@ class VastProvider(BaseProvider):
       min_reliability: float = 0.90,
       **kwargs
   ) -> Instance:
+    if template:
+      kind, val = parse_template_identifier(template)
+      if kind == "image":
+        image_name = val
+      elif kind == "template":
+        template_id = val
+
     target_offer_id = offer_id
     if target_offer_id is None:
       offers = self.search_offers(
@@ -243,13 +263,21 @@ class VastProvider(BaseProvider):
         )
       target_offer_id = offers[0]["id"]
 
-    resolved_image = image_name or self.default_image
-    body = {
+    body: Dict[str, Any] = {
         "client_id": "me",
-        "image": resolved_image,
         "disk": disk_gb,
         "runtype": "ssh"
     }
+    if template_id:
+      if str(template_id).isdigit():
+        body["template_id"] = int(template_id)
+      else:
+        body["template_hash_id"] = str(template_id)
+
+    resolved_image = image_name or (None if template_id else self.default_image)
+    if resolved_image:
+      body["image"] = resolved_image
+
     if env:
       body["env"] = env
 
@@ -307,3 +335,48 @@ class VastProvider(BaseProvider):
       regex = re.compile(filter_pattern, re.IGNORECASE)
       result = [g for g in result if regex.search(g["displayName"])]
     return result
+
+  def list_templates(self, filter_pattern: Optional[str] = None) -> List[Template]:
+    templates: List[Template] = []
+    try:
+      res = self._request("GET", "/template/", params={"q": "{}"})
+      raw_tpls = res.get("templates", []) if isinstance(res, dict) else []
+      for t in raw_tpls:
+        t_id = str(t.get("hash_id") or t.get("id") or "")
+        name = t.get("name") or t_id
+        img = t.get("image")
+        desc = t.get("desc")
+        templates.append(Template(
+            id=format_template_identifier("template", t_id),
+            name=name,
+            provider="vast",
+            type="template",
+            image_name=img,
+            description=desc,
+            raw=t
+        ))
+    except Exception:
+      pass
+
+    common_images = [
+        ("pytorch/pytorch:latest", "PyTorch Latest"),
+        ("nvidia/cuda:12.2.0-devel-ubuntu22.04", "CUDA 12.2 Devel Ubuntu 22.04"),
+        ("tensorflow/tensorflow:latest-gpu", "TensorFlow Latest GPU"),
+    ]
+    for img_name, desc in common_images:
+      templates.append(Template(
+          id=format_template_identifier("image", img_name),
+          name=desc,
+          provider="vast",
+          type="image",
+          image_name=img_name
+      ))
+
+    if filter_pattern:
+      regex = re.compile(filter_pattern, re.IGNORECASE)
+      templates = [
+          t for t in templates
+          if regex.search(t.id) or regex.search(t.name) or regex.search(t.image_name or "")
+      ]
+
+    return templates

@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -12,10 +13,12 @@ from xpu_shell.providers import (
     get_provider,
     resolve_provider,
     parse_instance_identifier,
+    parse_template_identifier,
+    format_template_identifier,
     save_last_provider,
     get_last_provider
 )
-from xpu_shell.providers.base import Instance
+from xpu_shell.providers.base import Instance, Template
 from xpu_shell.providers.runpod_provider import RunPodProvider
 from xpu_shell.providers.vast_provider import VastProvider
 from xpu_shell.providers.spheron_provider import SpheronProvider
@@ -39,6 +42,33 @@ class TestProviders(unittest.TestCase):
     prov, pid = parse_instance_identifier("plain-id")
     self.assertIsNone(prov)
     self.assertEqual(pid, "plain-id")
+
+  def test_parse_and_format_template_identifier(self):
+    self.assertEqual(format_template_identifier("image", "pytorch/pytorch:latest"), "image:pytorch/pytorch:latest")
+    self.assertEqual(format_template_identifier("template", "c21f8a"), "template:c21f8a")
+    self.assertEqual(format_template_identifier("image", "image:already-prefixed"), "image:already-prefixed")
+
+    kind, val = parse_template_identifier("image:pytorch/pytorch:latest")
+    self.assertEqual(kind, "image")
+    self.assertEqual(val, "pytorch/pytorch:latest")
+
+    kind, val = parse_template_identifier("template:c21f8a")
+    self.assertEqual(kind, "template")
+    self.assertEqual(val, "c21f8a")
+
+    kind, val = parse_template_identifier("pytorch/pytorch:latest")
+    self.assertEqual(kind, "image")
+    self.assertEqual(val, "pytorch/pytorch:latest")
+
+    kind, val = parse_template_identifier("c21f8a")
+    self.assertEqual(kind, "template")
+    self.assertEqual(val, "c21f8a")
+
+    kind, val = parse_template_identifier("Ubuntu 22.04 LTS")
+    self.assertEqual(kind, "image")
+    self.assertEqual(val, "Ubuntu 22.04 LTS")
+
+    self.assertEqual(parse_template_identifier(None), (None, None))
 
   def test_get_provider(self):
     rp = get_provider("runpod")
@@ -218,6 +248,11 @@ class TestVastProvider(unittest.TestCase):
     self.assertEqual(offers[0]["id"], 9992)
     self.assertEqual(offers[0]["dph_total"], 0.30)
     self.assertEqual(offers[1]["id"], 9991)
+    called_params = mock_req.call_args[1].get("params", {})
+    self.assertIn("q", called_params)
+    parsed_q = json.loads(called_params["q"])
+    self.assertEqual(parsed_q.get("rentable"), {"eq": True})
+    self.assertEqual(parsed_q.get("rented"), {"eq": False})
 
   @patch("requests.Session.request")
   def test_stop_and_terminate(self, mock_req):
@@ -264,6 +299,45 @@ class TestVastProvider(unittest.TestCase):
     self.assertIn("/asks/1234/", put_call[0][1])
     body = put_call[1]["json"]
     self.assertEqual(body["image"], "pytorch/pytorch:latest")
+
+  @patch("requests.Session.request")
+  def test_create_instance_with_template(self, mock_req):
+    mock_put_resp = MagicMock(status_code=200, content=b'{}', json=MagicMock(return_value={"new_contract": 6666}))
+    mock_get_resp = MagicMock(status_code=200, content=b'{}', json=MagicMock(return_value={"instances": [{"id": 6666, "actual_status": "running"}]}))
+    mock_req.side_effect = [mock_put_resp, mock_get_resp]
+
+    vast = VastProvider(api_key="fake-vast-key")
+    # Using template:hash
+    vast.create_instance(offer_id=1234, template="template:tpl-hash-123")
+    body = mock_req.call_args_list[0][1]["json"]
+    self.assertEqual(body.get("template_hash_id"), "tpl-hash-123")
+
+    # Using image:custom/image:tag
+    mock_req.reset_mock()
+    mock_req.side_effect = [mock_put_resp, mock_get_resp]
+    vast.create_instance(offer_id=1234, template="image:custom/pytorch:latest")
+    body = mock_req.call_args_list[0][1]["json"]
+    self.assertEqual(body.get("image"), "custom/pytorch:latest")
+
+  @patch("requests.Session.request")
+  def test_list_templates(self, mock_req):
+    mock_resp = MagicMock(status_code=200, content=b'{}')
+    mock_resp.json.return_value = {
+        "templates": [
+            {
+                "hash_id": "abc123hash",
+                "name": "PyTorch Dev Template",
+                "image": "pytorch/pytorch:2.1",
+                "desc": "A great dev template"
+            }
+        ]
+    }
+    mock_req.return_value = mock_resp
+
+    vast = VastProvider(api_key="fake-vast-key")
+    tpls = vast.list_templates()
+    self.assertTrue(any(t.id == "template:abc123hash" for t in tpls))
+    self.assertTrue(any(t.id == "image:pytorch/pytorch:latest" for t in tpls))
 
 
 class TestVastCLIIntegration(unittest.TestCase):
@@ -467,13 +541,14 @@ class TestVastCLIIntegration(unittest.TestCase):
           cli.main()
         self.assertEqual(ctx.exception.code, 2)
 
-  def test_vast_rejects_templates_subcommand(self):
-    test_args = ["cli.py", "--provider", "vast", "templates"]
+  @patch("sys.stdout")
+  def test_vast_cli_templates(self, mock_stdout):
+    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "templates"]
     with patch.object(sys, "argv", test_args):
-      with patch("sys.stderr"):
-        with self.assertRaises(SystemExit) as ctx:
-          cli.main()
-        self.assertEqual(ctx.exception.code, 2)
+      cli.main()
+    calls = [call[0][0] for call in mock_stdout.write.call_args_list if call[0]]
+    output = "".join(calls)
+    self.assertIn("image:pytorch/pytorch:latest", output)
 
   @patch("xpu_shell.providers.vast_provider.VastProvider.create_instance")
   @patch("xpu_shell.providers.vast_provider.VastProvider.get_instance")
@@ -636,6 +711,24 @@ class TestSpheronProvider(unittest.TestCase):
     self.assertEqual(body["disk"], 80.0)
     self.assertEqual(body["operatingSystem"], "ubuntu-22.04")
     self.assertEqual(sp.default_image, "ubuntu-22.04")
+
+  @patch("requests.Session.request")
+  def test_create_instance_with_template(self, mock_req):
+    mock_post_resp = MagicMock(status_code=200, content=b'{}', json=MagicMock(return_value={"id": "dep-tpl"}))
+    mock_get_resp = MagicMock(status_code=200, content=b'{}', json=MagicMock(return_value={"id": "dep-tpl", "status": "Running"}))
+    mock_req.side_effect = [mock_post_resp, mock_get_resp]
+
+    sp = SpheronProvider(api_key="fake-key")
+    inst = sp.create_instance(offer_id="off-1", template="image:debian-12")
+    self.assertEqual(inst.id, "dep-tpl")
+    body = mock_req.call_args_list[0][1]["json"]
+    self.assertEqual(body["operatingSystem"], "debian-12")
+
+  def test_list_templates(self):
+    sp = SpheronProvider(api_key="fake-key")
+    tpls = sp.list_templates()
+    self.assertTrue(any(t.id == "image:ubuntu-22.04" for t in tpls))
+    self.assertTrue(any(t.id == "image:debian-12" for t in tpls))
 
   @patch("requests.Session.request")
   def test_create_instance_auto_search(self, mock_req):

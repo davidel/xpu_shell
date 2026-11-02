@@ -3,7 +3,13 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 import runpod
 
-from xpu_shell.providers.base import BaseProvider, Instance
+from xpu_shell.providers.base import (
+    BaseProvider,
+    Instance,
+    Template,
+    format_template_identifier,
+    parse_template_identifier
+)
 
 
 def get_pod_ssh_endpoint(pod_info: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[int]]:
@@ -120,21 +126,7 @@ class RunPodProvider(BaseProvider):
     )
 
   def register_commands(self, subparsers: Any) -> None:
-    templates_parser = subparsers.add_parser("templates", help="List available pod templates on RunPod")
-    templates_parser.add_argument(
-        "filter",
-        nargs="?",
-        default=None,
-        help="Optional regex pattern to filter templates by ID, Name, or Image (case-insensitive)"
-    )
-    templates_parser.add_argument(
-        "-r",
-        "--regex",
-        "--filter",
-        dest="regex_filter",
-        default=None,
-        help="Optional regex pattern to filter templates by ID, Name, or Image (case-insensitive)"
-    )
+    pass
 
   def list_instances(self) -> List[Instance]:
     pods = runpod.get_pods() or []
@@ -151,6 +143,12 @@ class RunPodProvider(BaseProvider):
     return instance.ssh_host, instance.ssh_port
 
   def create_instance(self, **kwargs) -> Instance:
+    if "template" in kwargs and kwargs["template"]:
+      kind, val = parse_template_identifier(kwargs.pop("template"))
+      if kind == "image":
+        kwargs["image_name"] = val
+      elif kind == "template":
+        kwargs["template_id"] = val
     pod = runpod.create_pod(**kwargs)
     if not pod or not pod.get("id"):
       raise RuntimeError(f"RunPod failed to return a valid instance ID: {pod}")
@@ -174,3 +172,64 @@ class RunPodProvider(BaseProvider):
       regex = re.compile(filter_pattern, re.IGNORECASE)
       gpus = [g for g in gpus if regex.search(g.get("id", "")) or regex.search(g.get("displayName", ""))]
     return gpus
+
+  def list_templates(self, filter_pattern: Optional[str] = None) -> List[Template]:
+    templates: List[Template] = []
+    try:
+      from xpu_shell.cli import get_pod_templates
+      raw_tpls = get_pod_templates()
+    except Exception:
+      try:
+        from runpod.api.graphql import run_graphql_query
+        query = """
+        query PodTemplates {
+          myself {
+            podTemplates {
+              id
+              name
+              imageName
+            }
+          }
+        }
+        """
+        resp = run_graphql_query(query)
+        raw_tpls = resp.get("data", {}).get("myself", {}).get("podTemplates", [])
+      except Exception:
+        raw_tpls = []
+
+    for t in raw_tpls:
+      t_id = str(t.get("id") or "")
+      name = t.get("name") or t_id
+      img = t.get("imageName")
+      templates.append(Template(
+          id=format_template_identifier("template", t_id),
+          name=name,
+          provider="runpod",
+          type="template",
+          image_name=img,
+          raw=t
+      ))
+
+    common_images = [
+        ("runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04", "RunPod PyTorch 2.1 (CUDA 11.8)"),
+        ("runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04", "RunPod PyTorch 2.2 (CUDA 12.1)"),
+        ("runpod/tensorflow:2.14.0-py3.10-cuda11.8.0-devel-ubuntu22.04", "RunPod TensorFlow 2.14"),
+        ("runpod/stable-diffusion:webui-11.8.0", "RunPod Stable Diffusion WebUI"),
+    ]
+    for img_name, desc in common_images:
+      templates.append(Template(
+          id=format_template_identifier("image", img_name),
+          name=desc,
+          provider="runpod",
+          type="image",
+          image_name=img_name
+      ))
+
+    if filter_pattern:
+      regex = re.compile(filter_pattern, re.IGNORECASE)
+      templates = [
+          t for t in templates
+          if regex.search(t.id) or regex.search(t.name) or regex.search(t.image_name or "")
+      ]
+
+    return templates
