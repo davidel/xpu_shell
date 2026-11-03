@@ -12,6 +12,7 @@ A unified command-line interface to provision, execute, and supervise workloads 
 
 - **Seamless File Transfers (`cp`)**: Transfer files and directories to and from remote instances via `scp` with intuitive `[instance_id:]path` and `:/path` syntax, automatic SSH port & key resolution, recursive copying (`-r`), and attribute preservation (`-P`).
 - **In-Memory Secret & Environment Injection**: Pass sensitive secrets (e.g. S3/GCS keys, R2 tokens) into remote scripts in-memory via SSH with `--env` / `-e` or `--env-file` without persisting credentials to the remote disk.
+- **Auth-Injecting Egress Proxy & SSH Reverse Tunneling**: Keep upstream credentials (HuggingFace, AWS, Cloudflare R2, Google Cloud Storage, WandB, Civitai, GitHub) entirely on your local workstation. Automatically tunnels requests from untrusted GPU instances through a local proxy with on-the-fly SigV4 / OAuth2 / Bearer signing and zero disk or memory exposure on the remote host.
 - **Graceful Job Termination**: Kills remote jobs by sending `SIGTERM` first, monitoring exit status, and escalating to `SIGKILL` after a configurable timeout (default: 30s).
 - **GPU Querying & Marketplace Resolution**: List available GPU types and pricing using `gpus` with regex filtering across RunPod or Vast.ai.
 - **Smart SSH Key Auto-Detection**: Searches for standard SSH public keys (`id_rsa.pub`, `id_ed25519.pub`, `id_ecdsa.pub`, `id_dsa.pub`) in your local `~/.ssh/` directory automatically.
@@ -462,6 +463,31 @@ xpush cp ':/workspace/temp/co*' ./
 
 ---
 
+### 14. `proxy`
+
+Manage long-lived auth-injecting proxies and SSH reverse tunnels for XPU instances. Protects sensitive API keys and tokens from untrusted remote GPU hosts by keeping secrets on your local machine and dynamically signing requests in-flight.
+
+```bash
+xpush proxy <start|stop|status|list> [OPTIONS]
+```
+
+| Argument / Flag | Default | Description |
+|---|---|---|
+| `proxy_action` | *Required* | Action to perform (`start`, `stop`, `status`, `list`) |
+| `-p`, `--pod` | *None* | Target pod ID (defaults to last created pod) |
+| `--remote-port` | `8080` | Port on the remote instance for the reverse tunnel |
+| `--allow-write` | *None* | Semicolon-separated bucket or path patterns permitted for write operations (e.g. `s3://my-bucket/checkpoints/*`) |
+| `-i`, `--ssh-private-key-path` | *None* | Path to private SSH key (auto-detected if omitted) |
+| `--ssh-config` | *None* (or `$RUNPOD_SSH_CONFIG`) | Path to custom SSH config file |
+| `-v`, `--verbose` | `False` | Show detailed proxy and connection progress |
+
+When an auth proxy is active for a pod:
+* `xpush run` and `xpush exec` automatically inject the redirected endpoints (`HF_ENDPOINT`, `AWS_ENDPOINT_URL`, etc.).
+* `/etc/profile.d/xpu_proxy.sh` is automatically maintained on the pod for interactive SSH sessions.
+* The proxy daemon cleanly stops when `xpush stop`, `xpush terminate`, or `xpush proxy stop` is executed.
+
+---
+
 ### Examples
 
 ### Launch on RunPod (default)
@@ -520,6 +546,21 @@ xpush logs -j job-1788613220-1817e4 -f
 
 # Terminate gracefully (automatically targets the last job ID, or specify with -j)
 xpush kill
+```
+
+### Secure Untrusted Hosts with Auth Proxy
+```bash
+# Start an auth-injecting proxy for the active pod (keeps HF, AWS, R2, WandB keys local):
+xpush proxy start --allow-write "s3://my-bucket/checkpoints/*"
+
+# Any run or exec command automatically uses the secure endpoints with zero keys on the remote host:
+xpush run python train.py --model meta-llama/Llama-3-8B
+
+# Check status of the active proxy tunnel:
+xpush proxy status
+
+# When finished or when the pod is stopped, the proxy is cleanly torn down:
+xpush proxy stop
 ```
 
 ### Fully customized creation

@@ -2258,6 +2258,102 @@ class TestRunPodShellCLI(unittest.TestCase):
       with self.assertRaises(FileNotFoundError):
         cli.main()
 
+  @patch("xpu_shell.cli.start_proxy_for_pod")
+  @patch("xpu_shell.cli.resolve_instance_ssh_endpoint", return_value=("1.2.3.4", 22))
+  @patch("xpu_shell.cli.find_ssh_private_key", return_value=None)
+  def test_proxy_start_command(self, mock_priv, mock_endpoint, mock_start):
+    mock_start.return_value = {
+        "pod_id": "pod-123",
+        "remote_port": 8080,
+        "local_port": 39123,
+        "routes": ["/hf"],
+        "env": {"HF_ENDPOINT": "http://127.0.0.1:8080/hf"}
+    }
+    test_args = ["cli.py", "--api-key", "fake-key", "proxy", "start", "-p", "pod-123"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    mock_start.assert_called_once()
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("Auth proxy active for pod 'pod-123'", output)
+    self.assertIn("HF_ENDPOINT", output)
+
+  @patch("xpu_shell.cli.stop_proxy_for_pod", return_value=True)
+  def test_proxy_stop_command(self, mock_stop):
+    test_args = ["cli.py", "--api-key", "fake-key", "proxy", "stop", "-p", "pod-123"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    mock_stop.assert_called_once_with(pod_id="pod-123")
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("Auth proxy stopped for pod 'pod-123'", output)
+
+  @patch("xpu_shell.cli.get_active_proxy_info")
+  def test_proxy_status_command(self, mock_info):
+    mock_info.return_value = {
+        "pid": 12345,
+        "pod_id": "pod-123",
+        "remote_port": 8080,
+        "local_port": 39123,
+        "routes": ["/hf", "/s3"],
+        "started_at": 1000.0,
+        "env": {"HF_ENDPOINT": "http://127.0.0.1:8080/hf"}
+    }
+    test_args = ["cli.py", "--api-key", "fake-key", "proxy", "status", "-p", "pod-123"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("ACTIVE", output)
+    self.assertIn("/hf, /s3", output)
+
+  @patch("xpu_shell.cli.list_active_proxies")
+  def test_proxy_list_command(self, mock_list):
+    mock_list.return_value = [{
+        "pid": 12345,
+        "pod_id": "pod-123",
+        "remote_port": 8080,
+        "local_port": 39123,
+        "routes": ["/hf"]
+    }]
+    test_args = ["cli.py", "--api-key", "fake-key", "proxy", "list"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("pod-123", output)
+    self.assertIn("8080", output)
+
+  @patch("xpu_shell.cli.get_active_proxy_info")
+  @patch("xpu_shell.cli.save_last_job_id")
+  @patch("xpu_shell.cli.find_ssh_private_key", return_value=None)
+  @patch("xpu_shell.cli.execute_remote_command")
+  @patch("runpod.get_pod")
+  def test_run_auto_injects_proxy_env(self, mock_get_pod, mock_exec_cmd, mock_find_priv, mock_save_job, mock_proxy_info):
+    mock_get_pod.return_value = {
+        "id": "pod-123",
+        "runtime": {
+            "ports": [{"privatePort": 22, "isExternal": 12345, "address": "12.34.56.78"}]
+        }
+    }
+    mock_exec_cmd.return_value = {"job_id": "job-1", "pid": "123", "exit_code": 0}
+    mock_proxy_info.return_value = {
+        "env": {"HF_ENDPOINT": "http://127.0.0.1:8080/hf"}
+    }
+
+    test_args = ["cli.py", "--api-key", "fake-key", "run", "-p", "pod-123", "python", "train.py"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    self.assertTrue(mock_exec_cmd.called)
+    called_extra_env = mock_exec_cmd.call_args[1].get("extra_env")
+    self.assertIsNotNone(called_extra_env)
+    self.assertEqual(called_extra_env.get("HF_ENDPOINT"), "http://127.0.0.1:8080/hf")
+
 
 if __name__ == "__main__":
   unittest.main()

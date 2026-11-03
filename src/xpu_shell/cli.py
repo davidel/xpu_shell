@@ -35,6 +35,12 @@ from xpu_shell.providers import (
     parse_template_identifier,
     format_template_identifier
 )
+from xpu_shell.proxy_manager import (
+    start_proxy_for_pod,
+    stop_proxy_for_pod,
+    get_active_proxy_info,
+    list_active_proxies
+)
 
 
 class ParseEnv(argparse.Action):
@@ -859,6 +865,29 @@ def cmd_create(args):
     if not getattr(args, "detach", False) and res.get("exit_code", 0) != 0:
       sys.exit(res["exit_code"])
 
+  if getattr(args, "auth_proxy", False):
+    created_id = None
+    if "inst" in locals():
+      created_id = inst.id
+    elif "pod" in locals():
+      created_id = pod.get("id")
+    if created_id:
+      try:
+        from xpu_shell.proxy_manager import start_proxy_for_pod
+        p_info = start_proxy_for_pod(
+            pod_id=created_id,
+            host=ssh_host,
+            port=ssh_port,
+            remote_port=getattr(args, "proxy_remote_port", 8080),
+            private_key_path=priv_key,
+            ssh_config_path=ssh_config,
+            allow_write=getattr(args, "proxy_allow_write", None),
+            verbose=verbose
+        )
+        print(f"Auth proxy active on remote port {p_info.get('remote_port')}.")
+      except Exception as e:
+        print(f"Warning: Failed to auto-start auth proxy: {e}", file=sys.stderr)
+
   print(f"\nPod is ready! Connect via SSH:")
   print(f"ssh {ssh_config_flag}-p {ssh_port} root@{ssh_host}")
 
@@ -895,6 +924,12 @@ def cmd_exec(args):
 
   if getattr(args, "env", None):
     extra_env.update(args.env)
+
+  proxy_info = get_active_proxy_info(target_pod_id)
+  if proxy_info and proxy_info.get("env"):
+    for k, v in proxy_info["env"].items():
+      if k not in extra_env:
+        extra_env[k] = v
 
   res = execute_remote_script(
       host=ssh_host,
@@ -943,6 +978,12 @@ def cmd_run(args):
 
   if getattr(args, "env", None):
     extra_env.update(args.env)
+
+  proxy_info = get_active_proxy_info(target_pod_id)
+  if proxy_info and proxy_info.get("env"):
+    for k, v in proxy_info["env"].items():
+      if k not in extra_env:
+        extra_env[k] = v
 
   res = execute_remote_command(
       host=ssh_host,
@@ -1706,6 +1747,7 @@ def cmd_info(args):
 
 def cmd_stop(args):
   target_pod_id = resolve_pod_id(args)
+  stop_proxy_for_pod(target_pod_id)
   provider = resolve_provider(args=args, instance_id=target_pod_id)
   print(f"Stopping pod '{target_pod_id}'...")
   try:
@@ -1720,6 +1762,7 @@ def cmd_stop(args):
 
 def cmd_terminate(args):
   target_pod_id = resolve_pod_id(args)
+  stop_proxy_for_pod(target_pod_id)
   provider = resolve_provider(args=args, instance_id=target_pod_id)
   print(f"Terminating pod '{target_pod_id}'...")
   try:
@@ -1731,6 +1774,68 @@ def cmd_terminate(args):
     print(f"Termination request sent for pod '{target_pod_id}'.")
   except Exception as e:
     fatal(f"Failed to terminate pod: {e}", exc=e.__class__)
+
+
+def cmd_proxy(args):
+  action = getattr(args, "proxy_action", None)
+
+  if action == "start":
+    target_pod_id = resolve_pod_id(args)
+    verbose = getattr(args, "verbose", False)
+    ssh_host, ssh_port = resolve_instance_ssh_endpoint(target_pod_id, args, verbose=verbose)
+    priv_key = find_ssh_private_key(None, getattr(args, "ssh_private_key_path", None))
+    remote_port = getattr(args, "remote_port", 8080)
+    allow_write = getattr(args, "allow_write", None)
+    info = start_proxy_for_pod(
+      pod_id=target_pod_id,
+      host=ssh_host,
+      port=ssh_port,
+      remote_port=remote_port,
+      private_key_path=priv_key,
+      ssh_config_path=getattr(args, "ssh_config", None),
+      allow_write=allow_write,
+      verbose=verbose
+    )
+    print(f"Auth proxy active for pod '{target_pod_id}':")
+    print(f"  Remote tunnel: 127.0.0.1:{info.get('remote_port')}")
+    print(f"  Local proxy:   127.0.0.1:{info.get('local_port')}")
+    print(f"  Routes:        {', '.join(info.get('routes', [])) or 'None'}")
+    if info.get("env"):
+      print("  Injected environment:")
+      for k, v in info["env"].items():
+        print(f"    {k}={v}")
+  elif action == "stop":
+    target_pod_id = resolve_pod_id(args)
+    stopped = stop_proxy_for_pod(pod_id=target_pod_id)
+    if stopped:
+      print(f"Auth proxy stopped for pod '{target_pod_id}'.")
+    else:
+      print(f"No active auth proxy found for pod '{target_pod_id}'.")
+  elif action == "status":
+    target_pod_id = resolve_pod_id(args)
+    info = get_active_proxy_info(target_pod_id)
+    if info:
+      uptime = int(time.time() - info.get("started_at", time.time()))
+      print(f"Auth proxy status for pod '{target_pod_id}': ACTIVE (PID {info.get('pid')}, uptime {uptime}s)")
+      print(f"  Remote tunnel: 127.0.0.1:{info.get('remote_port')}")
+      print(f"  Local proxy:   127.0.0.1:{info.get('local_port')}")
+      print(f"  Routes:        {', '.join(info.get('routes', [])) or 'None'}")
+      if info.get("env"):
+        print("  Injected environment:")
+        for k, v in info["env"].items():
+          print(f"    {k}={v}")
+    else:
+      print(f"Auth proxy status for pod '{target_pod_id}': INACTIVE")
+  elif action == "list":
+    proxies = list_active_proxies()
+    if not proxies:
+      print("No active auth proxies.")
+      return
+    print(f"{'POD ID':<25} {'REMOTE PORT':<12} {'LOCAL PORT':<12} {'ROUTES':<30} {'PID':<8}")
+    print("-" * 90)
+    for p in proxies:
+      routes_str = ", ".join(p.get("routes", []))
+      print(f"{p.get('pod_id'):<25} {p.get('remote_port'):<12} {p.get('local_port'):<12} {routes_str:<30} {p.get('pid'):<8}")
 
 
 def cmd_gpus(args):
@@ -2118,6 +2223,23 @@ def main(args=None):
       type=int,
       default=180,
       help="Max seconds to wait for SSH and setup readiness (default: %(default)s)"
+  )
+  create_parser.add_argument(
+      "--auth-proxy",
+      action="store_true",
+      default=False,
+      help="Automatically start a local auth-injecting proxy and SSH tunnel for the new instance"
+  )
+  create_parser.add_argument(
+      "--proxy-remote-port",
+      type=int,
+      default=8080,
+      help="Remote port for the reverse tunnel when --auth-proxy is used (default: 8080)"
+  )
+  create_parser.add_argument(
+      "--proxy-allow-write",
+      default=None,
+      help="Semicolon-separated path/bucket patterns permitted for write operations through the proxy"
   )
 
   # Register provider-specific create arguments and subcommands
@@ -2750,6 +2872,53 @@ def main(args=None):
       help="Optional regex pattern to filter templates by ID, Name, or Image (case-insensitive)"
   )
 
+  # Proxy Command
+  proxy_parser = subparsers.add_parser("proxy", help="Manage auth-injecting proxies and SSH reverse tunnels for XPU instances")
+  proxy_parser.add_argument(
+      "proxy_action",
+      choices=["start", "stop", "status", "list"],
+      help="Action to perform: start, stop, status, or list"
+  )
+  proxy_parser.add_argument(
+      "-p",
+      "--pod",
+      dest="pod",
+      default=None,
+      help="The ID of the target pod (defaults to last created pod)"
+  )
+  proxy_parser.add_argument(
+      "--remote-port",
+      type=int,
+      default=8080,
+      help="Port on the remote instance for the reverse tunnel (default: 8080)"
+  )
+  proxy_parser.add_argument(
+      "--allow-write",
+      default=None,
+      help="Semicolon-separated path/bucket patterns permitted for write operations (e.g. 's3://my-bucket/checkpoints/*')"
+  )
+  proxy_parser.add_argument(
+      "-i",
+      "--ssh-private-key-path",
+      dest="ssh_private_key_path",
+      default=None,
+      help="Path to SSH private key file"
+  )
+  proxy_parser.add_argument(
+      "--ssh-config",
+      dest="ssh_config",
+      default=os.environ.get("RUNPOD_SSH_CONFIG"),
+      help="Path to custom SSH config file"
+  )
+  proxy_parser.add_argument(
+      "-v",
+      "--verbose",
+      action="store_true",
+      dest="verbose",
+      default=False,
+      help="Show detailed proxy and connection progress"
+  )
+
   args = parser.parse_args(raw_args)
 
   # Set API Key and resolve provider
@@ -2798,6 +2967,8 @@ def main(args=None):
     cmd_logs(args)
   elif args.command == "kill":
     cmd_kill(args)
+  elif args.command == "proxy":
+    cmd_proxy(args)
 
 
 if __name__ == "__main__":
