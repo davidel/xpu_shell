@@ -50,6 +50,10 @@ A unified command-line interface to provision, execute, and supervise workloads 
    # For CloudRift:
    export CLOUDRIFT_API_KEY="your_cloudrift_api_key"
    # (CloudRift also automatically detects ~/.cloudrift_api_key)
+
+   # For Lium:
+   export LIUM_API_KEY="your_lium_api_key"
+   # (Lium also automatically detects ~/.lium_api_key or ~/.config/lium/api_key)
    ```
 
    *(Optional)* Configure or isolate the persistence directory (defaults to `~/.config/xpu_shell`):
@@ -66,8 +70,8 @@ A unified command-line interface to provision, execute, and supervise workloads 
 
 ### Global Options
 Every subcommand supports the following options:
-* `--api-key`: API key for the active provider (RunPod, Vast.ai, Spheron, or CloudRift). Defaults to `RUNPOD_API_KEY`, `VAST_API_KEY` / `~/.vast_api_key`, `SPHERON_API_KEY` / `~/.spheron_api_key`, or `CLOUDRIFT_API_KEY` / `~/.cloudrift_api_key`.
-* `--provider`: Target provider (`runpod`, `vast`, `spheron`, or `cloudrift`). Defaults to auto-detecting from the target ID, the last used provider in `~/.config/xpu_shell/.last_provider`, or `runpod`.
+* `--api-key`: API key for the active provider (RunPod, Vast.ai, Spheron, CloudRift, or Lium). Defaults to `RUNPOD_API_KEY`, `VAST_API_KEY` / `~/.vast_api_key`, `SPHERON_API_KEY` / `~/.spheron_api_key`, `CLOUDRIFT_API_KEY` / `~/.cloudrift_api_key`, or `LIUM_API_KEY` / `~/.lium_api_key`.
+* `--provider`: Target provider (`runpod`, `vast`, `spheron`, `cloudrift`, or `lium`). Defaults to auto-detecting from the target ID, the last used provider in `~/.config/xpu_shell/.last_provider`, or `runpod`.
 
 ---
 
@@ -140,6 +144,13 @@ These options are registered dynamically when targeting CloudRift (`xpush --prov
 | Flag | Default | Description |
 |---|---|---|
 | `--datacenter` | *None* | Target CloudRift datacenter (e.g. `us-east-1`, optional, auto-switches provider to `cloudrift`) |
+
+#### Lium-Specific Options
+These options are registered dynamically when targeting Lium (`xpush --provider lium create ...`):
+
+| Flag | Default | Description |
+|---|---|---|
+| `--executor-id` | *None* | Target Lium executor node UUID (optional, auto-switches provider to `lium`) |
 
 > [!NOTE]
 > `xpu-shell` uses provider-driven argument parsing. Provider-specific flags (e.g. `--offer-id` for Vast or `--template-id` for RunPod) are only registered for their respective provider and will be rejected if passed to an incompatible provider. Run `xpush --provider <name> create --help` to inspect provider-specific help.

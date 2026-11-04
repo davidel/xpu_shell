@@ -23,6 +23,13 @@ from xpu_shell.providers.runpod_provider import RunPodProvider
 from xpu_shell.providers.vast_provider import VastProvider
 from xpu_shell.providers.spheron_provider import SpheronProvider
 from xpu_shell.providers.cloudrift_provider import CloudRiftProvider
+from xpu_shell.providers.lium_provider import (
+    LiumProvider,
+    find_lium_api_key,
+    normalize_lium_status,
+    extract_lium_ssh_endpoint,
+    normalize_lium_instance
+)
 
 
 class TestProviders(unittest.TestCase):
@@ -47,6 +54,10 @@ class TestProviders(unittest.TestCase):
     prov, pid = parse_instance_identifier("cr:cr-888")
     self.assertEqual(prov, "cr")
     self.assertEqual(pid, "cr-888")
+
+    prov, pid = parse_instance_identifier("lium:pod-uuid-123")
+    self.assertEqual(prov, "lium")
+    self.assertEqual(pid, "pod-uuid-123")
 
     prov, pid = parse_instance_identifier("plain-id")
     self.assertIsNone(prov)
@@ -99,6 +110,13 @@ class TestProviders(unittest.TestCase):
     cr_alias = get_provider("cr", api_key="test-key")
     self.assertIsInstance(cr_alias, CloudRiftProvider)
 
+    lium = get_provider("lium", api_key="test-key")
+    self.assertIsInstance(lium, LiumProvider)
+    self.assertEqual(lium.name, "lium")
+
+    lium_alias = get_provider("lium.io", api_key="test-key")
+    self.assertIsInstance(lium_alias, LiumProvider)
+
     with self.assertRaises(ValueError):
       get_provider("invalid-provider")
 
@@ -112,9 +130,17 @@ class TestProviders(unittest.TestCase):
     p = resolve_provider(args=args)
     self.assertIsInstance(p, CloudRiftProvider)
 
-    args = MagicMock(provider=None, datacenter="us-east-1", ssh_key_id=None, offer_id=None, api_key="cr-key")
+    args = MagicMock(provider="lium", api_key="lium-key")
+    p = resolve_provider(args=args)
+    self.assertIsInstance(p, LiumProvider)
+
+    args = MagicMock(provider=None, datacenter="us-east-1", ssh_key_id=None, offer_id=None, executor_id=None, api_key="cr-key")
     p = resolve_provider(args=args)
     self.assertIsInstance(p, CloudRiftProvider)
+
+    args = MagicMock(provider=None, datacenter=None, ssh_key_id=None, offer_id=None, executor_id="exec-123", api_key="lium-key")
+    p = resolve_provider(args=args)
+    self.assertIsInstance(p, LiumProvider)
 
     # 2. Prefixed ID
     p = resolve_provider(instance_id="vast:12345")
@@ -126,11 +152,17 @@ class TestProviders(unittest.TestCase):
     p = resolve_provider(instance_id="cloudrift:cr-555")
     self.assertIsInstance(p, CloudRiftProvider)
 
+    p = resolve_provider(instance_id="lium:pod-999")
+    self.assertIsInstance(p, LiumProvider)
+
     p = resolve_provider(instance_id="cr-node-222")
     self.assertIsInstance(p, CloudRiftProvider)
 
     p = resolve_provider(instance_id="spheron-node-222")
     self.assertIsInstance(p, SpheronProvider)
+
+    p = resolve_provider(instance_id="lium-node-333")
+    self.assertIsInstance(p, LiumProvider)
 
     p = resolve_provider(instance_id="runpod:xyz-999")
     self.assertIsInstance(p, RunPodProvider)
@@ -1432,5 +1464,283 @@ class TestCloudRiftProvider(unittest.TestCase):
     self.assertIn("RUNNING", output)
     self.assertIn("1x RTX 4090", output)
     self.assertIn("198.51.100.22:22", output)
+
+  def test_lium_find_api_key(self):
+    self.assertEqual(find_lium_api_key("explicit-key"), "explicit-key")
+    with patch.dict(os.environ, {"LIUM_API_KEY": "env-key"}):
+      self.assertEqual(find_lium_api_key(), "env-key")
+
+    with patch.dict(os.environ, {}, clear=True):
+      with patch("pathlib.Path.is_file", return_value=True):
+        with patch("pathlib.Path.read_text", return_value="file-key"):
+          self.assertEqual(find_lium_api_key(), "file-key")
+
+  def test_lium_normalize_status(self):
+    self.assertEqual(normalize_lium_status("running"), "RUNNING")
+    self.assertEqual(normalize_lium_status("active"), "RUNNING")
+    self.assertEqual(normalize_lium_status("pending"), "INITIALIZING")
+    self.assertEqual(normalize_lium_status("start_pending"), "INITIALIZING")
+    self.assertEqual(normalize_lium_status("stopped"), "STOPPED")
+    self.assertEqual(normalize_lium_status("deleting"), "TERMINATED")
+    self.assertEqual(normalize_lium_status("failed"), "FAILED")
+    self.assertEqual(normalize_lium_status("creation_failed"), "FAILED")
+    self.assertEqual(normalize_lium_status(None), "UNKNOWN")
+
+  def test_lium_extract_ssh_endpoint(self):
+    h, p = extract_lium_ssh_endpoint({"ssh_connect_cmd": "ssh root@192.0.2.10 -p 22001"})
+    self.assertEqual(h, "192.0.2.10")
+    self.assertEqual(p, 22001)
+
+    h, p = extract_lium_ssh_endpoint({"ssh_connect_cmd": "ssh -p 33333 user@gpu.lium.io"})
+    self.assertEqual(h, "gpu.lium.io")
+    self.assertEqual(p, 33333)
+
+    h, p = extract_lium_ssh_endpoint({
+        "ssh_connect_cmd": "",
+        "executor_ip_address": "198.51.100.5",
+        "ports_mapping": {"22/tcp": 22022}
+    })
+    self.assertEqual(h, "198.51.100.5")
+    self.assertEqual(p, 22022)
+
+  def test_lium_normalize_instance(self):
+    raw = {
+        "id": "lium-pod-101",
+        "pod_name": "my-lium-pod",
+        "status": "RUNNING",
+        "ssh_connect_cmd": "ssh root@10.20.30.40 -p 22050",
+        "gpu_name": "NVIDIA H100 80GB HBM3",
+        "gpu_count": 2,
+        "price": 3.50,
+        "cpu_count": 32,
+        "ram_total": 128 * 1024 * 1024 * 1024,
+        "storage_limit_gb": 200,
+        "docker_image": "daturaai/pytorch:latest"
+    }
+    inst = normalize_lium_instance(raw)
+    self.assertEqual(inst.id, "lium-pod-101")
+    self.assertEqual(inst.name, "my-lium-pod")
+    self.assertEqual(inst.provider, "lium")
+    self.assertEqual(inst.status, "RUNNING")
+    self.assertEqual(inst.ssh_host, "10.20.30.40")
+    self.assertEqual(inst.ssh_port, 22050)
+    self.assertEqual(inst.gpu_name, "NVIDIA H100 80GB HBM3")
+    self.assertEqual(inst.gpu_count, 2)
+    self.assertEqual(inst.cost_per_hr, 3.50)
+    self.assertEqual(inst.vcpu_count, 32)
+    self.assertEqual(inst.memory_gb, 128.0)
+    self.assertEqual(inst.disk_gb, 200.0)
+    self.assertEqual(inst.image_name, "daturaai/pytorch:latest")
+
+  @patch("requests.Session.request")
+  def test_lium_list_and_get_instances(self, mock_req):
+    mock_list_resp = MagicMock()
+    mock_list_resp.status_code = 200
+    mock_list_resp.content = b'[{"id": "pod-1", "pod_name": "p1", "status": "RUNNING"}]'
+    mock_list_resp.json.return_value = [{"id": "pod-1", "pod_name": "p1", "status": "RUNNING"}]
+
+    mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
+    mock_get_resp.content = b'{"id": "pod-1", "pod_name": "p1", "status": "RUNNING", "ssh_connect_cmd": "ssh root@1.2.3.4 -p 22"}'
+    mock_get_resp.json.return_value = {
+        "id": "pod-1",
+        "pod_name": "p1",
+        "status": "RUNNING",
+        "ssh_connect_cmd": "ssh root@1.2.3.4 -p 22"
+    }
+
+    mock_req.side_effect = [mock_list_resp, mock_get_resp, mock_get_resp]
+
+    provider = LiumProvider(api_key="test-lium-key")
+    pods = provider.list_instances()
+    self.assertEqual(len(pods), 1)
+    self.assertEqual(pods[0].id, "pod-1")
+    self.assertEqual(pods[0].provider, "lium")
+
+    single = provider.get_instance("pod-1")
+    self.assertEqual(single.id, "pod-1")
+    self.assertEqual(single.status, "RUNNING")
+
+    host, port = provider.get_ssh_endpoint("pod-1")
+    self.assertEqual(host, "1.2.3.4")
+    self.assertEqual(port, 22)
+
+  @patch("requests.Session.request")
+  def test_lium_create_instance_spec(self, mock_req):
+    mock_spec_resp = MagicMock()
+    mock_spec_resp.status_code = 200
+    mock_spec_resp.content = b'{"pod_id": "pod-new-uuid", "price_per_hour": 1.25}'
+    mock_spec_resp.json.return_value = {
+        "pod_id": "pod-new-uuid",
+        "price_per_hour": 1.25
+    }
+
+    mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
+    mock_get_resp.content = b'{"id": "pod-new-uuid", "pod_name": "worker", "status": "PENDING"}'
+    mock_get_resp.json.return_value = {
+        "id": "pod-new-uuid",
+        "pod_name": "worker",
+        "status": "PENDING"
+    }
+
+    mock_req.side_effect = [mock_spec_resp, mock_get_resp]
+
+    provider = LiumProvider(api_key="test-lium-key")
+    inst = provider.create_instance(
+        name="worker",
+        gpu_name="RTX4090",
+        ssh_public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...",
+        gpu_count=1
+    )
+    self.assertEqual(inst.id, "pod-new-uuid")
+    self.assertEqual(inst.status, "INITIALIZING")
+    self.assertEqual(inst.provider, "lium")
+
+  @patch("requests.Session.request")
+  def test_lium_create_instance_executor(self, mock_req):
+    mock_rent_resp = MagicMock()
+    mock_rent_resp.status_code = 200
+    mock_rent_resp.content = b'{"id": "pod-direct-uuid", "pod_name": "direct-worker", "status": "RUNNING"}'
+    mock_rent_resp.json.return_value = {
+        "id": "pod-direct-uuid",
+        "pod_name": "direct-worker",
+        "status": "RUNNING"
+    }
+
+    mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
+    mock_get_resp.content = b'{"id": "pod-direct-uuid", "pod_name": "direct-worker", "status": "RUNNING"}'
+    mock_get_resp.json.return_value = {
+        "id": "pod-direct-uuid",
+        "pod_name": "direct-worker",
+        "status": "RUNNING"
+    }
+
+    mock_req.side_effect = [mock_rent_resp, mock_get_resp]
+
+    provider = LiumProvider(api_key="test-lium-key")
+    inst = provider.create_instance(
+        name="direct-worker",
+        executor_id="exec-uuid-999",
+        ssh_public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."
+    )
+    self.assertEqual(inst.id, "pod-direct-uuid")
+    self.assertEqual(inst.provider, "lium")
+
+  @patch("requests.Session.request")
+  def test_lium_terminate_and_stop(self, mock_req):
+    mock_del_resp = MagicMock()
+    mock_del_resp.status_code = 200
+    mock_del_resp.content = b'{"success": true}'
+    mock_del_resp.json.return_value = {"success": True}
+    mock_req.return_value = mock_del_resp
+
+    provider = LiumProvider(api_key="test-lium-key")
+    provider.stop_instance("pod-123")
+    provider.terminate_instance("pod-123")
+
+    with self.assertRaises(NotImplementedError):
+      provider.start_instance("pod-123")
+
+  @patch("requests.Session.request")
+  def test_lium_list_gpus(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'[]'
+    mock_resp.json.return_value = [
+        {
+            "id": "exec-1",
+            "machine_name": "node-1",
+            "price_per_gpu": 1.50,
+            "gpu_count": 2,
+            "reliability_score": 0.99,
+            "specs": {
+                "gpu": {
+                    "count": 2,
+                    "details": [
+                        {"name": "NVIDIA H100 80GB HBM3", "capacity": 81559}
+                    ]
+                },
+                "network": {
+                    "ema_verifyx_download_speed": 1000,
+                    "ema_verifyx_upload_speed": 500
+                },
+                "hard_disk": {
+                    "total": 500 * (1024 ** 3)
+                }
+            }
+        }
+    ]
+    mock_req.return_value = mock_resp
+
+    provider = LiumProvider(api_key="test-lium-key")
+    aggs = provider.list_gpus(expand=False)
+    self.assertEqual(len(aggs), 1)
+    self.assertEqual(aggs[0]["displayName"], "NVIDIA H100 80GB HBM3")
+    self.assertEqual(aggs[0]["minPrice"], 3.0)
+
+    offers = provider.list_gpus(expand=True)
+    self.assertEqual(len(offers), 1)
+    self.assertEqual(offers[0]["id"], "exec-1")
+    self.assertEqual(offers[0]["num_gpus"], 2)
+
+  @patch("requests.Session.request")
+  def test_lium_list_templates(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'[]'
+    mock_resp.json.return_value = [
+        {
+            "id": "bb50bd64-e363-4adc-8111-1d44c8e36807",
+            "name": "Pytorch (Cuda + DinD)",
+            "description": "Standard PyTorch environment",
+            "docker_image": "daturaai/pytorch",
+            "docker_image_tag": "latest"
+        }
+    ]
+    mock_req.return_value = mock_resp
+
+    provider = LiumProvider(api_key="test-lium-key")
+    templates = provider.list_templates()
+    self.assertEqual(len(templates), 1)
+    self.assertEqual(templates[0].id, "template:bb50bd64-e363-4adc-8111-1d44c8e36807")
+    self.assertEqual(templates[0].image_name, "daturaai/pytorch:latest")
+    self.assertEqual(templates[0].provider, "lium")
+
+  @patch("xpu_shell.cli.resolve_provider")
+  def test_lium_cli_info(self, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "lium"
+    mock_prov.get_instance.return_value = Instance(
+        id="pod-cli-test",
+        name="test-lium-pod",
+        provider="lium",
+        status="RUNNING",
+        ssh_host="192.0.2.55",
+        ssh_port=22022,
+        gpu_name="NVIDIA H100 80GB HBM3",
+        gpu_count=1,
+        uptime_seconds=1800,
+        cost_per_hr=1.50,
+        vcpu_count=16,
+        memory_gb=64.0,
+        disk_gb=100.0,
+        image_name="daturaai/pytorch:latest",
+        raw={}
+    )
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "--provider", "lium", "--api-key", "fake-lium-key", "info", "-p", "pod-cli-test"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    mock_prov.get_instance.assert_called_once_with("pod-cli-test")
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("test-lium-pod (pod-cli-test)", output)
+    self.assertIn("RUNNING", output)
+    self.assertIn("1x NVIDIA H100 80GB HBM3", output)
+    self.assertIn("192.0.2.55:22022", output)
 
 

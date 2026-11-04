@@ -769,6 +769,56 @@ def cmd_create(args):
       time.sleep(5)
     else:
       fatal(f"Timed out waiting for CloudRift instance '{inst.id}' to become ready after {poll_timeout} seconds.")
+  elif provider.name == "lium":
+    print(f"Launching Lium instance '{args.name}'...")
+    try:
+      disk_total = float(args.container_disk_size) + float(args.volume_size or 0)
+      inst = provider.create_instance(
+          name=args.name,
+          gpu_name=args.gpu_type,
+          image_name=image_name,
+          template=template_id,
+          disk_gb=disk_total,
+          env=container_env,
+          ssh_public_key=ssh_public_key,
+          executor_id=getattr(args, "executor_id", None) or getattr(args, "offer_id", None),
+          gpu_count=args.gpu_count
+      )
+    except Exception as e:
+      fatal(f"Failed to create Lium instance: {e}", exc=e.__class__)
+
+    save_last_pod_id(inst.id)
+    save_last_provider("lium")
+
+    print("Waiting for instance to initialize...")
+    start_poll = time.time()
+    poll_timeout = getattr(args, "ssh_timeout", 180)
+    if poll_timeout < 300:
+      poll_timeout = 300
+    ssh_host = None
+    ssh_port = None
+    last_status = None
+    while time.time() - start_poll < poll_timeout:
+      try:
+        inst = provider.get_instance(inst.id)
+      except Exception:
+        time.sleep(5)
+        continue
+
+      if inst.status in ("TERMINATED", "FAILED", "DEAD"):
+        fatal(f"Instance initialization failed with status: {inst.status}")
+
+      if inst.status != last_status:
+        last_status = inst.status
+        print(f"Instance status: {inst.status}")
+
+      if inst.status == "RUNNING" and inst.ssh_host and inst.ssh_port:
+        ssh_host = inst.ssh_host
+        ssh_port = inst.ssh_port
+        break
+      time.sleep(5)
+    else:
+      fatal(f"Timed out waiting for Lium instance '{inst.id}' to become ready after {poll_timeout} seconds.")
   else:
     # Launch Pod on RunPod
     print(f"Launching RunPod instance '{args.name}'...")
@@ -1898,13 +1948,15 @@ def cmd_gpus(args):
       fatal(f"Invalid regex pattern '{filter_pattern}': {e}", ValueError)
 
   expand = getattr(args, "expand", False)
-  if provider.name in ("vast", "spheron", "cloudrift"):
+  if provider.name in ("vast", "spheron", "cloudrift", "lium"):
     if provider.name == "vast":
       prov_label = "Vast.ai"
     elif provider.name == "spheron":
       prov_label = "Spheron"
-    else:
+    elif provider.name == "cloudrift":
       prov_label = "CloudRift"
+    else:
+      prov_label = "Lium"
     print(f"Fetching available GPU types on {prov_label}...")
     try:
       gpus = provider.list_gpus(filter_pattern, expand=expand)
@@ -2113,6 +2165,7 @@ def main(args=None):
   pre_parser.add_argument("--offer-id", default=None)
   pre_parser.add_argument("--ssh-key-id", default=None)
   pre_parser.add_argument("--datacenter", default=None)
+  pre_parser.add_argument("--executor-id", default=None)
   pre_parser.add_argument("-p", "--pod", default=None)
   pre_parser.add_argument("--api-key", default=None)
   pre_args, remaining_args = pre_parser.parse_known_args(raw_args)
@@ -2130,15 +2183,15 @@ def main(args=None):
 
   parser = argparse.ArgumentParser(
       prog="xpu-shell",
-      description="Manage AI accelerator instances (RunPod, Vast.ai, Spheron, CloudRift, etc.) with remote execution and job supervision."
+      description="Manage AI accelerator instances (RunPod, Vast.ai, Spheron, CloudRift, Lium, etc.) with remote execution and job supervision."
   )
   parser.add_argument(
       "--api-key",
-      help="API Key (can also be set via RUNPOD_API_KEY, VAST_API_KEY, SPHERON_API_KEY, or CLOUDRIFT_API_KEY environment variable)"
+      help="API Key (can also be set via RUNPOD_API_KEY, VAST_API_KEY, SPHERON_API_KEY, CLOUDRIFT_API_KEY, or LIUM_API_KEY environment variable)"
   )
   parser.add_argument(
       "--provider",
-      help="Target provider ('runpod', 'vast', 'spheron', or 'cloudrift'). Default: auto-detect or runpod.",
+      help="Target provider ('runpod', 'vast', 'spheron', 'cloudrift', or 'lium'). Default: auto-detect or runpod.",
       default=None
   )
 
@@ -2154,7 +2207,7 @@ def main(args=None):
   )
   create_parser.add_argument(
       "--provider",
-      help="Target provider ('runpod', 'vast', 'spheron', or 'cloudrift'). Default: auto-detect or runpod.",
+      help="Target provider ('runpod', 'vast', 'spheron', 'cloudrift', or 'lium'). Default: auto-detect or runpod.",
       default=None
   )
   create_parser.add_argument(
@@ -2988,6 +3041,8 @@ def main(args=None):
       os.environ["SPHERON_API_KEY"] = args.api_key
     elif provider.name == "cloudrift":
       os.environ["CLOUDRIFT_API_KEY"] = args.api_key
+    elif provider.name == "lium":
+      os.environ["LIUM_API_KEY"] = args.api_key
     else:
       runpod.api_key = args.api_key
   elif not runpod.api_key:
