@@ -46,6 +46,10 @@ A unified command-line interface to provision, execute, and supervise workloads 
    # For Spheron:
    export SPHERON_API_KEY="your_spheron_api_key"
    # (Spheron also automatically detects ~/.spheron_api_key)
+
+   # For CloudRift:
+   export CLOUDRIFT_API_KEY="your_cloudrift_api_key"
+   # (CloudRift also automatically detects ~/.cloudrift_api_key)
    ```
 
    *(Optional)* Configure or isolate the persistence directory (defaults to `~/.config/xpu_shell`):
@@ -62,8 +66,8 @@ A unified command-line interface to provision, execute, and supervise workloads 
 
 ### Global Options
 Every subcommand supports the following options:
-* `--api-key`: API key for the active provider (RunPod, Vast.ai, or Spheron). Defaults to `RUNPOD_API_KEY`, `VAST_API_KEY` / `~/.vast_api_key`, or `SPHERON_API_KEY` / `~/.spheron_api_key`.
-* `--provider`: Target provider (`runpod`, `vast`, or `spheron`). Defaults to auto-detecting from the target ID, the last used provider in `~/.config/xpu_shell/.last_provider`, or `runpod`.
+* `--api-key`: API key for the active provider (RunPod, Vast.ai, Spheron, or CloudRift). Defaults to `RUNPOD_API_KEY`, `VAST_API_KEY` / `~/.vast_api_key`, `SPHERON_API_KEY` / `~/.spheron_api_key`, or `CLOUDRIFT_API_KEY` / `~/.cloudrift_api_key`.
+* `--provider`: Target provider (`runpod`, `vast`, `spheron`, or `cloudrift`). Defaults to auto-detecting from the target ID, the last used provider in `~/.config/xpu_shell/.last_provider`, or `runpod`.
 
 ---
 
@@ -129,6 +133,13 @@ These options are registered dynamically when targeting Spheron (`xpush --provid
 | `--offer-id` | *None* | Direct Spheron offer ID to deploy |
 | `--ssh-key-id` | *None* | Spheron pre-registered SSH key ID (auto-switches provider to `spheron`) |
 | `--region` | *None* | Target deployment region (optional) |
+
+#### CloudRift-Specific Options
+These options are registered dynamically when targeting CloudRift (`xpush --provider cloudrift create ...`):
+
+| Flag | Default | Description |
+|---|---|---|
+| `--datacenter` | *None* | Target CloudRift datacenter (e.g. `us-east-1`, optional, auto-switches provider to `cloudrift`) |
 
 > [!NOTE]
 > `xpu-shell` uses provider-driven argument parsing. Provider-specific flags (e.g. `--offer-id` for Vast or `--template-id` for RunPod) are only registered for their respective provider and will be rejected if passed to an incompatible provider. Run `xpush --provider <name> create --help` to inspect provider-specific help.

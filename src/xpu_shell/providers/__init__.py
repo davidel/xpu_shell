@@ -12,6 +12,7 @@ from xpu_shell.providers.base import (
 from xpu_shell.providers.runpod_provider import RunPodProvider
 from xpu_shell.providers.vast_provider import VastProvider
 from xpu_shell.providers.spheron_provider import SpheronProvider
+from xpu_shell.providers.cloudrift_provider import CloudRiftProvider
 
 
 CONFIG_DIR = Path.home() / ".config" / "xpu_shell"
@@ -55,8 +56,10 @@ def get_provider(name: str = "runpod", api_key: Optional[str] = None) -> BasePro
     return VastProvider(api_key=api_key)
   elif norm in ("spheron", "spheron-ai", "spheron.network"):
     return SpheronProvider(api_key=api_key)
+  elif norm in ("cloudrift", "cr", "cloudrift-ai", "cloudrift.ai"):
+    return CloudRiftProvider(api_key=api_key)
   else:
-    raise ValueError(f"Unknown provider '{name}'. Supported providers: 'runpod', 'vast', 'spheron'.")
+    raise ValueError(f"Unknown provider '{name}'. Supported providers: 'runpod', 'vast', 'spheron', 'cloudrift'.")
 
 
 def parse_instance_identifier(raw_id: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -65,7 +68,7 @@ def parse_instance_identifier(raw_id: Optional[str]) -> Tuple[Optional[str], Opt
   raw_id = str(raw_id).strip()
   if ":" in raw_id:
     prov, pid = raw_id.split(":", 1)
-    if prov.lower() in ("runpod", "rp", "vast", "vastai", "spheron"):
+    if prov.lower() in ("runpod", "rp", "vast", "vastai", "spheron", "cloudrift", "cr"):
       return prov.lower(), pid
   return None, raw_id
 
@@ -82,11 +85,15 @@ def resolve_provider(args=None, instance_id: Optional[str] = None) -> BaseProvid
     api_key = getattr(args, "api_key", None) if args else None
     return get_provider("spheron", api_key=api_key)
 
+  if getattr(args, "datacenter", None) is not None:
+    api_key = getattr(args, "api_key", None) if args else None
+    return get_provider("cloudrift", api_key=api_key)
+
   if getattr(args, "offer_id", None) is not None:
     api_key = getattr(args, "api_key", None) if args else None
     return get_provider("vast", api_key=api_key)
 
-  # 3. Prefixed instance identifier e.g. "vast:12345" or "spheron:xyz"
+  # 3. Prefixed instance identifier e.g. "vast:12345" or "spheron:xyz" or "cloudrift:abc"
   if instance_id:
     prov, _ = parse_instance_identifier(instance_id)
     if prov:
@@ -96,7 +103,11 @@ def resolve_provider(args=None, instance_id: Optional[str] = None) -> BaseProvid
   if instance_id and instance_id.lower().startswith("spheron-"):
     return get_provider("spheron")
 
-  # 5. Numeric ID heuristic for Vast.ai (RunPod IDs are alphanumeric/UUIDs)
+  # 5. CloudRift ID prefix heuristic
+  if instance_id and (instance_id.lower().startswith("cr-") or instance_id.lower().startswith("cloudrift-")):
+    return get_provider("cloudrift")
+
+  # 6. Numeric ID heuristic for Vast.ai (RunPod IDs are alphanumeric/UUIDs)
   if instance_id and instance_id.isdigit():
     return get_provider("vast")
 

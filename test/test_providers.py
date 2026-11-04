@@ -22,6 +22,7 @@ from xpu_shell.providers.base import Instance, Template
 from xpu_shell.providers.runpod_provider import RunPodProvider
 from xpu_shell.providers.vast_provider import VastProvider
 from xpu_shell.providers.spheron_provider import SpheronProvider
+from xpu_shell.providers.cloudrift_provider import CloudRiftProvider
 
 
 class TestProviders(unittest.TestCase):
@@ -38,6 +39,14 @@ class TestProviders(unittest.TestCase):
     prov, pid = parse_instance_identifier("spheron:dep-777")
     self.assertEqual(prov, "spheron")
     self.assertEqual(pid, "dep-777")
+
+    prov, pid = parse_instance_identifier("cloudrift:cr-999")
+    self.assertEqual(prov, "cloudrift")
+    self.assertEqual(pid, "cr-999")
+
+    prov, pid = parse_instance_identifier("cr:cr-888")
+    self.assertEqual(prov, "cr")
+    self.assertEqual(pid, "cr-888")
 
     prov, pid = parse_instance_identifier("plain-id")
     self.assertIsNone(prov)
@@ -83,6 +92,13 @@ class TestProviders(unittest.TestCase):
     self.assertIsInstance(spheron, SpheronProvider)
     self.assertEqual(spheron.name, "spheron")
 
+    cr = get_provider("cloudrift", api_key="test-key")
+    self.assertIsInstance(cr, CloudRiftProvider)
+    self.assertEqual(cr.name, "cloudrift")
+
+    cr_alias = get_provider("cr", api_key="test-key")
+    self.assertIsInstance(cr_alias, CloudRiftProvider)
+
     with self.assertRaises(ValueError):
       get_provider("invalid-provider")
 
@@ -92,12 +108,26 @@ class TestProviders(unittest.TestCase):
     p = resolve_provider(args=args)
     self.assertIsInstance(p, VastProvider)
 
+    args = MagicMock(provider="cloudrift", api_key="cr-key")
+    p = resolve_provider(args=args)
+    self.assertIsInstance(p, CloudRiftProvider)
+
+    args = MagicMock(provider=None, datacenter="us-east-1", ssh_key_id=None, offer_id=None, api_key="cr-key")
+    p = resolve_provider(args=args)
+    self.assertIsInstance(p, CloudRiftProvider)
+
     # 2. Prefixed ID
     p = resolve_provider(instance_id="vast:12345")
     self.assertIsInstance(p, VastProvider)
 
     p = resolve_provider(instance_id="spheron:dep-111")
     self.assertIsInstance(p, SpheronProvider)
+
+    p = resolve_provider(instance_id="cloudrift:cr-555")
+    self.assertIsInstance(p, CloudRiftProvider)
+
+    p = resolve_provider(instance_id="cr-node-222")
+    self.assertIsInstance(p, CloudRiftProvider)
 
     p = resolve_provider(instance_id="spheron-node-222")
     self.assertIsInstance(p, SpheronProvider)
@@ -1139,4 +1169,268 @@ class TestSpheronProvider(unittest.TestCase):
     mock_prov.get_instance.assert_called_once_with("spheron-auto-1")
     mock_print.assert_called_once()
     self.assertIn('"deploymentId": "spheron-auto-1"', mock_print.call_args[0][0])
+
+
+class TestCloudRiftProvider(unittest.TestCase):
+
+  @patch("requests.Session.request")
+  def test_list_instances(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{"data": {"instances": []}}'
+    mock_resp.json.return_value = {
+        "version": "~upcoming",
+        "data": {
+            "instances": [
+                {
+                    "id": "cr-inst-123",
+                    "instance_name": "my-cr-worker",
+                    "status": "Active",
+                    "host_address": "198.51.100.10",
+                    "gpus": [
+                        {"brand_short": "RTX 4090"}
+                    ],
+                    "cost_per_hour": 50,
+                    "cpu_limit": 16,
+                    "dram_limit": 68719476736,
+                    "disk_limit": 107374182400,
+                    "virtual_machines": [{"name": "ubuntu"}]
+                }
+            ]
+        }
+    }
+    mock_req.return_value = mock_resp
+
+    provider = CloudRiftProvider(api_key="test-cr-key")
+    instances = provider.list_instances()
+    self.assertEqual(len(instances), 1)
+    inst = instances[0]
+    self.assertEqual(inst.id, "cr-inst-123")
+    self.assertEqual(inst.name, "my-cr-worker")
+    self.assertEqual(inst.status, "RUNNING")
+    self.assertEqual(inst.ssh_host, "198.51.100.10")
+    self.assertEqual(inst.ssh_port, 22)
+    self.assertEqual(inst.gpu_name, "RTX 4090")
+    self.assertEqual(inst.gpu_count, 1)
+    self.assertEqual(inst.cost_per_hr, 0.50)
+    self.assertEqual(inst.vcpu_count, 16)
+    self.assertAlmostEqual(inst.memory_gb, 64.0)
+    self.assertAlmostEqual(inst.disk_gb, 100.0)
+
+  @patch("requests.Session.request")
+  def test_get_instance_and_ssh_endpoint(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{"data": {"instances": []}}'
+    mock_resp.json.return_value = {
+        "version": "~upcoming",
+        "data": {
+            "instances": [
+                {
+                    "id": "cr-inst-456",
+                    "instance_name": "worker-456",
+                    "status": "Active",
+                    "host_address": "203.0.113.5",
+                    "port_mappings": [[2222, 22]]
+                }
+            ]
+        }
+    }
+    mock_req.return_value = mock_resp
+
+    provider = CloudRiftProvider(api_key="test-cr-key")
+    inst = provider.get_instance("cr-inst-456")
+    self.assertEqual(inst.id, "cr-inst-456")
+    self.assertEqual(inst.ssh_host, "203.0.113.5")
+    self.assertEqual(inst.ssh_port, 2222)
+
+    host, port = provider.get_ssh_endpoint("cr-inst-456")
+    self.assertEqual(host, "203.0.113.5")
+    self.assertEqual(port, 2222)
+
+  @patch("requests.Session.request")
+  def test_create_instance_vm(self, mock_req):
+    mock_types_resp = MagicMock()
+    mock_types_resp.status_code = 200
+    mock_types_resp.content = b'{"data": {}}'
+    mock_types_resp.json.return_value = {
+        "version": "~upcoming",
+        "data": {
+            "instance_types": [
+                {
+                    "name": "rtx4090",
+                    "brand_short": "RTX 4090",
+                    "cost_per_hour": 45,
+                    "datacenters": [{"name": "us-east-1"}],
+                    "variants": [
+                        {
+                            "cost_per_hour": 45,
+                            "gpu_count": 1,
+                            "dram": 34359738368,
+                            "disk": 107374182400,
+                            "available_nodes": 2
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+
+    mock_rent_resp = MagicMock()
+    mock_rent_resp.status_code = 200
+    mock_rent_resp.content = b'{"data": {}}'
+    mock_rent_resp.json.return_value = {
+        "version": "~upcoming",
+        "data": {
+            "instance_ids": ["cr-inst-new-1"]
+        }
+    }
+
+    mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
+    mock_get_resp.content = b'{"data": {}}'
+    mock_get_resp.json.return_value = {
+        "version": "~upcoming",
+        "data": {
+            "instances": [
+                {
+                    "id": "cr-inst-new-1",
+                    "name": "cloudrift-worker",
+                    "status": "Initializing",
+                    "host_address": "198.51.100.99"
+                }
+            ]
+        }
+    }
+
+    mock_req.side_effect = [mock_types_resp, mock_rent_resp, mock_get_resp]
+
+    provider = CloudRiftProvider(api_key="test-cr-key")
+    inst = provider.create_instance(
+        name="cloudrift-worker",
+        gpu_name="RTX 4090",
+        ssh_public_key="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC...",
+        datacenter="us-east-1"
+    )
+
+    self.assertEqual(inst.id, "cr-inst-new-1")
+    self.assertEqual(inst.status, "INITIALIZING")
+
+    rent_call = mock_req.call_args_list[1]
+    rent_payload = rent_call[1]["json"]
+    self.assertEqual(rent_payload["version"], "~upcoming")
+    self.assertEqual(rent_payload["data"]["selector"]["ByInstanceTypeAndLocation"]["instance_type"], "rtx4090")
+    self.assertEqual(rent_payload["data"]["selector"]["ByInstanceTypeAndLocation"]["datacenters"], ["us-east-1"])
+    self.assertIn("VirtualMachine", rent_payload["data"]["config"])
+    self.assertIn("PublicKeys", rent_payload["data"]["config"]["VirtualMachine"]["ssh_key"])
+
+  @patch("requests.Session.request")
+  def test_terminate_instance(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{"data": {}}'
+    mock_resp.json.return_value = {"version": "~upcoming", "data": {}}
+    mock_req.return_value = mock_resp
+
+    provider = CloudRiftProvider(api_key="test-cr-key")
+    provider.terminate_instance("cr-inst-123")
+    self.assertEqual(mock_req.call_count, 1)
+    call_json = mock_req.call_args[1]["json"]
+    self.assertEqual(call_json["data"]["selector"]["ById"], ["cr-inst-123"])
+
+  @patch("requests.Session.request")
+  def test_list_gpus(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{"data": {}}'
+    mock_resp.json.return_value = {
+        "version": "~upcoming",
+        "data": {
+            "instance_types": [
+                {
+                    "name": "rtx4090",
+                    "brand_short": "RTX 4090",
+                    "cost_per_hour": 50,
+                    "variants": [
+                        {
+                            "cost_per_hour": 50,
+                            "gpu_count": 1,
+                            "dram": 25769803776,
+                            "disk": 107374182400,
+                            "available_nodes": 5
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+    mock_req.return_value = mock_resp
+
+    provider = CloudRiftProvider(api_key="test-cr-key")
+    gpus = provider.list_gpus()
+    self.assertEqual(len(gpus), 1)
+    self.assertEqual(gpus[0]["id"], "rtx4090")
+    self.assertEqual(gpus[0]["displayName"], "RTX 4090")
+    self.assertEqual(gpus[0]["minPrice"], 0.50)
+
+  @patch("requests.Session.request")
+  def test_list_templates(self, mock_req):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{"data": {}}'
+    mock_resp.json.return_value = {
+        "version": "~upcoming",
+        "data": {
+            "groups": [
+                {
+                    "recipes": [
+                        {"name": "ubuntu-22.04"}
+                    ]
+                }
+            ]
+        }
+    }
+    mock_req.return_value = mock_resp
+
+    provider = CloudRiftProvider(api_key="test-cr-key")
+    templates = provider.list_templates()
+    self.assertEqual(len(templates), 1)
+    self.assertEqual(templates[0].id, "template:ubuntu-22.04")
+    self.assertEqual(templates[0].provider, "cloudrift")
+
+  @patch("xpu_shell.cli.resolve_provider")
+  def test_cloudrift_cli_info(self, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "cloudrift"
+    mock_prov.get_instance.return_value = Instance(
+        id="cr-auto-1",
+        name="test-cr-node",
+        provider="cloudrift",
+        status="RUNNING",
+        ssh_host="198.51.100.22",
+        ssh_port=22,
+        gpu_name="RTX 4090",
+        gpu_count=1,
+        uptime_seconds=3600,
+        cost_per_hr=0.50,
+        vcpu_count=16,
+        memory_gb=64.0,
+        disk_gb=100.0,
+        image_name="ubuntu",
+        raw={"datacenter": "us-east-1"}
+    )
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "--provider", "cloudrift", "--api-key", "fake-cr-key", "info", "-p", "cr-auto-1"]
+    with patch.object(sys, "argv", test_args):
+      with patch("builtins.print") as mock_print:
+        cli.main()
+
+    mock_prov.get_instance.assert_called_once_with("cr-auto-1")
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("test-cr-node (cr-auto-1)", output)
+    self.assertIn("RUNNING", output)
+    self.assertIn("1x RTX 4090", output)
+    self.assertIn("198.51.100.22:22", output)
+
 
