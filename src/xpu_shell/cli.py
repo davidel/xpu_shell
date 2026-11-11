@@ -177,7 +177,9 @@ def resolve_pod_id(args):
 
 def resolve_job_id(args, required=True):
   job_id = getattr(args, "job", None)
-  if not job_id:
+  if job_id:
+    save_last_job_id(job_id)
+  else:
     job_id = get_last_job_id()
   if not job_id and required:
     fatal(
@@ -960,7 +962,7 @@ def cmd_create(args):
         ssh_timeout=getattr(args, "ssh_timeout", 180),
         ssh_config_path=ssh_config
     )
-    if res.get("job_id"):
+    if getattr(args, "detach", False) and res.get("job_id"):
       save_last_job_id(res["job_id"])
     if not getattr(args, "detach", False) and res.get("exit_code", 0) != 0:
       sys.exit(res["exit_code"])
@@ -1044,7 +1046,7 @@ def cmd_exec(args):
       extra_env=extra_env if extra_env else None,
       verbose=verbose
   )
-  if res.get("job_id"):
+  if getattr(args, "detach", False) and res.get("job_id"):
     save_last_job_id(res["job_id"])
   if not getattr(args, "detach", False) and res.get("exit_code", 0) != 0:
     sys.exit(res["exit_code"])
@@ -1098,7 +1100,7 @@ def cmd_run(args):
       use_shell=getattr(args, "use_shell", False),
       verbose=verbose
   )
-  if res.get("job_id"):
+  if getattr(args, "detach", False) and res.get("job_id"):
     save_last_job_id(res["job_id"])
 
   if not getattr(args, "detach", False) and res.get("exit_code", 0) != 0:
@@ -1302,7 +1304,9 @@ def cmd_logs(args):
     target_pod_id = get_last_pod_id()
     job_id = explicit_job
 
-  if not job_id:
+  if job_id:
+    save_last_job_id(job_id)
+  else:
     job_id = get_last_job_id()
 
   if not target_pod_id:

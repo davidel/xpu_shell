@@ -8,7 +8,7 @@ A unified command-line interface to provision, execute, and supervise workloads 
 - **Fast CLI Ergonomics (`xpush`)**: Provided with short `xpush` and full `xpu-shell` command aliases (plus backward-compatible `runpod-shell`).
 - **Docker-like Subcommands**: Simple interface to `create`, `list`, `info`, `stop`, `terminate`, `templates`, `gpus`, `run`, `exec`, and `cp`.
 - **Rich Instance Inspection (`info`)**: Inspect comprehensive specifications including GPU model, VRAM size, allocated vCPUs, system RAM, disk volumes, live utilization metrics (CPU %, RAM %, GPU %, VRAM %), uptime, cost, and direct SSH connection details.
-- **Automatic Instance & Job Memory**: Automatically remembers the last created instance ID and provider in `~/.config/xpu_shell/.last_pod_id` and the last executed job ID in `~/.config/xpu_shell/.last_job_id`. All commands (`run`, `exec`, `ps`, `logs`, `kill`, `cp`, `stop`, `terminate`) work seamlessly without having to re-type the instance ID.
+- **Automatic Instance & Job Memory**: Automatically remembers the last created instance ID and provider in `~/.config/xpu_shell/.last_pod_id` and the last executed detached or referenced job ID in `~/.config/xpu_shell/.last_job_id`. All commands (`run`, `exec`, `ps`, `logs`, `kill`, `cp`, `stop`, `terminate`) work seamlessly without having to re-type the instance ID.
 
 - **Seamless File Transfers (`cp`)**: Transfer files and directories to and from remote instances via `scp` with intuitive `[instance_id:]path` and `:/path` syntax, automatic SSH port & key resolution, recursive copying (`-r`), and attribute preservation (`-P`).
 - **In-Memory Secret & Environment Injection**: Pass sensitive secrets (e.g. S3/GCS keys, R2 tokens) into remote scripts in-memory via SSH with `--env` / `-e` or `--env-file` without persisting credentials to the remote disk.
@@ -290,7 +290,7 @@ xpush gpus --provider vast 4090 -l
 ---
 
 ### 8. `exec`
-Uploads and executes an arbitrary local script on an active instance via SSH. Supports foreground streaming or detached background execution, in-memory environment variable injection, and default instance resolution. Automatically remembers the executed Job ID in `~/.config/xpu_shell/.last_job_id`.
+Uploads and executes an arbitrary local script on an active instance via SSH. Supports foreground streaming or detached background execution, in-memory environment variable injection, and default instance resolution. Automatically remembers the executed Job ID in `~/.config/xpu_shell/.last_job_id` when detached (`-d`/`--detach`).
 
 ```bash
 # Execute on the last created instance
@@ -319,7 +319,7 @@ xpush exec -p <instance-id> <script-path> [OPTIONS]
 ---
 
 ### 9. `run`
-Executes an arbitrary command line directly (binary + args) on an active instance via SSH. Supports foreground streaming or detached background execution, in-memory environment variable injection, and default instance resolution. Automatically remembers the executed Job ID in `~/.config/xpu_shell/.last_job_id`.
+Executes an arbitrary command line directly (binary + args) on an active instance via SSH. Supports foreground streaming or detached background execution, in-memory environment variable injection, and default instance resolution. Automatically remembers the executed Job ID in `~/.config/xpu_shell/.last_job_id` when detached (`-d`/`--detach`).
 
 
 ```bash

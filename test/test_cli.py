@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 # Mock runpod module to avoid ModuleNotFoundError when importing cli
 sys.modules['runpod'] = MagicMock()
 
+import argparse
 import base64
 import os
 from pathlib import Path
@@ -304,6 +305,7 @@ class TestRunPodShellCLI(unittest.TestCase):
     self.assertIn("Note: RunPod allocates pooled GPU capacity", output)
     self.assertIn("RTX 4090", output)
 
+  @patch("xpu_shell.cli.save_last_job_id")
   @patch("subprocess.run")
   @patch("xpu_shell.cli.wait_for_ssh")
   @patch("xpu_shell.cli.execute_remote_script")
@@ -314,7 +316,7 @@ class TestRunPodShellCLI(unittest.TestCase):
   @patch("runpod.create_pod")
   @patch("runpod.get_pod")
   @patch("time.sleep")
-  def test_create_with_run_script(self, mock_sleep, mock_get_pod, mock_create_pod, mock_apt_file, mock_req, mock_ssh_key, mock_find_priv, mock_exec, mock_wait_ssh, mock_sub_run):
+  def test_create_with_run_script(self, mock_sleep, mock_get_pod, mock_create_pod, mock_apt_file, mock_req, mock_ssh_key, mock_find_priv, mock_exec, mock_wait_ssh, mock_sub_run, mock_save_job):
     mock_ssh_key.return_value = "ssh-rsa fake_public_key"
     mock_req.return_value = ""
     mock_apt_file.return_value = []
@@ -355,6 +357,62 @@ class TestRunPodShellCLI(unittest.TestCase):
         ssh_timeout=180,
         ssh_config_path=None
     )
+    mock_save_job.assert_not_called()
+
+  @patch("xpu_shell.cli.save_last_job_id")
+  @patch("subprocess.run")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.execute_remote_script")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("xpu_shell.cli.get_ssh_key")
+  @patch("xpu_shell.cli.read_requirements")
+  @patch("xpu_shell.cli.read_apt_packages_file")
+  @patch("runpod.create_pod")
+  @patch("runpod.get_pod")
+  @patch("time.sleep")
+  def test_create_with_run_script_detached(self, mock_sleep, mock_get_pod, mock_create_pod, mock_apt_file, mock_req, mock_ssh_key, mock_find_priv, mock_exec, mock_wait_ssh, mock_sub_run, mock_save_job):
+    mock_ssh_key.return_value = "ssh-rsa fake_public_key"
+    mock_req.return_value = ""
+    mock_apt_file.return_value = []
+    mock_create_pod.return_value = {"id": "pod-123"}
+    mock_get_pod.return_value = {
+        "id": "pod-123",
+        "desiredStatus": "RUNNING",
+        "runtime": {
+            "gpus": True,
+            "ports": [{"privatePort": 22, "isExternal": 12345, "address": "12.34.56.78"}]
+        }
+    }
+    mock_find_priv.return_value = Path("/fake/priv_key")
+    mock_exec.return_value = {"job_id": "job-1", "pid": "123", "exit_code": 0}
+
+    test_args = [
+        "cli.py",
+        "--api-key", "fake-api-key",
+        "create",
+        "--name", "test-worker",
+        "--image-name", "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",
+        "--run-script", "script.sh",
+        "--script-args", "--flag 1",
+        "-d"
+    ]
+
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_wait_ssh.assert_called_once()
+    mock_exec.assert_called_once_with(
+        host="12.34.56.78",
+        port=12345,
+        script_path="script.sh",
+        script_args="--flag 1",
+        detach=True,
+        private_key_path=Path("/fake/priv_key"),
+        wait_for_setup_flag=False,
+        ssh_timeout=180,
+        ssh_config_path=None
+    )
+    mock_save_job.assert_called_once_with("job-1")
 
   @patch("subprocess.run")
   @patch("xpu_shell.cli.wait_for_ssh")
@@ -519,10 +577,11 @@ class TestRunPodShellCLI(unittest.TestCase):
     self.assertIsNotNone(header_line)
     self.assertTrue(header_line.startswith("JOB ID   |"))
 
+  @patch("xpu_shell.cli.save_last_job_id")
   @patch("xpu_shell.cli.find_ssh_private_key")
   @patch("xpu_shell.cli.view_remote_logs")
   @patch("runpod.get_pod")
-  def test_logs_command(self, mock_get_pod, mock_view_logs, mock_find_priv):
+  def test_logs_command(self, mock_get_pod, mock_view_logs, mock_find_priv, mock_save_job):
     mock_find_priv.return_value = None
     mock_get_pod.return_value = {
         "id": "pod-123",
@@ -554,6 +613,7 @@ class TestRunPodShellCLI(unittest.TestCase):
         ssh_config_path="/dev/null",
         verbose=False
     )
+    mock_save_job.assert_called_once_with("job-1")
 
   @patch("xpu_shell.cli.find_ssh_private_key")
   @patch("xpu_shell.cli.kill_remote_job")
@@ -1549,6 +1609,19 @@ class TestRunPodShellCLI(unittest.TestCase):
       with patch.dict(os.environ, {}, clear=True):
         self.assertEqual(cli.get_last_job_id_file(), Path.home() / ".config" / "xpu_shell" / ".last_job_id")
 
+  def test_resolve_job_id(self):
+    with tempfile.TemporaryDirectory() as td:
+      fake_file = Path(td) / ".last_job_id"
+      with patch.dict(os.environ, {"XPU_SHELL_LAST_JOB_ID_FILE": str(fake_file)}):
+        args_with_job = argparse.Namespace(job="job-explicit-1")
+        resolved = cli.resolve_job_id(args_with_job)
+        self.assertEqual(resolved, "job-explicit-1")
+        self.assertEqual(cli.get_last_job_id(), "job-explicit-1")
+
+        args_without_job = argparse.Namespace(job=None)
+        resolved2 = cli.resolve_job_id(args_without_job)
+        self.assertEqual(resolved2, "job-explicit-1")
+
 
 
   @patch("xpu_shell.cli.save_last_job_id")
@@ -1633,13 +1706,41 @@ class TestRunPodShellCLI(unittest.TestCase):
         use_shell=False,
         verbose=False
     )
-    mock_save_job.assert_called_once_with("job-run-2")
+    mock_save_job.assert_not_called()
 
   @patch("xpu_shell.cli.save_last_job_id")
   @patch("xpu_shell.cli.find_ssh_private_key")
   @patch("xpu_shell.cli.execute_remote_script")
   @patch("runpod.get_pod")
-  def test_exec_saves_last_job_id(self, mock_get_pod, mock_exec, mock_find_priv, mock_save_job):
+  def test_exec_saves_last_job_id_when_detached(self, mock_get_pod, mock_exec, mock_find_priv, mock_save_job):
+    mock_find_priv.return_value = None
+    mock_get_pod.return_value = {
+        "id": "pod-exec",
+        "runtime": {
+            "ports": [{"privatePort": 22, "isExternal": 12345, "address": "12.34.56.78"}]
+        }
+    }
+    mock_exec.return_value = {"job_id": "job-exec-1", "pid": "101", "exit_code": 0}
+
+    test_args = [
+        "cli.py",
+        "--api-key", "fake-api-key",
+        "exec",
+        "-p", "pod-exec",
+        "-d",
+        "train.py"
+    ]
+
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_save_job.assert_called_once_with("job-exec-1")
+
+  @patch("xpu_shell.cli.save_last_job_id")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("xpu_shell.cli.execute_remote_script")
+  @patch("runpod.get_pod")
+  def test_exec_does_not_save_last_job_id_when_not_detached(self, mock_get_pod, mock_exec, mock_find_priv, mock_save_job):
     mock_find_priv.return_value = None
     mock_get_pod.return_value = {
         "id": "pod-exec",
@@ -1660,13 +1761,14 @@ class TestRunPodShellCLI(unittest.TestCase):
     with patch.object(sys, "argv", test_args):
       cli.main()
 
-    mock_save_job.assert_called_once_with("job-exec-1")
+    mock_save_job.assert_not_called()
 
+  @patch("xpu_shell.cli.save_last_job_id")
   @patch("xpu_shell.cli.find_ssh_private_key")
   @patch("xpu_shell.cli.view_remote_logs")
   @patch("xpu_shell.cli.get_last_pod_id")
   @patch("runpod.get_pod")
-  def test_logs_with_job_flag(self, mock_get_pod, mock_last_pod, mock_logs, mock_find_priv):
+  def test_logs_with_job_flag(self, mock_get_pod, mock_last_pod, mock_logs, mock_find_priv, mock_save_job):
     mock_last_pod.return_value = "pod-last"
     mock_find_priv.return_value = None
     mock_get_pod.return_value = {
@@ -1689,13 +1791,45 @@ class TestRunPodShellCLI(unittest.TestCase):
         ssh_config_path=None,
         verbose=False
     )
+    mock_save_job.assert_called_once_with("job-flag-1")
 
+  @patch("xpu_shell.cli.save_last_job_id")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("xpu_shell.cli.view_remote_logs")
+  @patch("xpu_shell.cli.get_last_pod_id")
+  @patch("runpod.get_pod")
+  def test_logs_with_positional_job(self, mock_get_pod, mock_last_pod, mock_logs, mock_find_priv, mock_save_job):
+    mock_last_pod.return_value = "pod-last"
+    mock_find_priv.return_value = None
+    mock_get_pod.return_value = {
+        "id": "pod-last",
+        "runtime": {
+            "ports": [{"privatePort": 22, "isExternal": 12345, "address": "12.34.56.78"}]
+        }
+    }
+    test_args = ["cli.py", "--api-key", "fake-api-key", "logs", "job-pos-1"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+    mock_get_pod.assert_called_once_with("pod-last")
+    mock_logs.assert_called_once_with(
+        host="12.34.56.78",
+        port=12345,
+        job_id="job-pos-1",
+        tail_lines=None,
+        follow=False,
+        private_key_path=None,
+        ssh_config_path=None,
+        verbose=False
+    )
+    mock_save_job.assert_called_once_with("job-pos-1")
+
+  @patch("xpu_shell.cli.save_last_job_id")
   @patch("xpu_shell.cli.get_last_job_id")
   @patch("xpu_shell.cli.find_ssh_private_key")
   @patch("xpu_shell.cli.view_remote_logs")
   @patch("xpu_shell.cli.get_last_pod_id")
   @patch("runpod.get_pod")
-  def test_logs_with_last_job_id(self, mock_get_pod, mock_last_pod, mock_logs, mock_find_priv, mock_last_job):
+  def test_logs_with_last_job_id(self, mock_get_pod, mock_last_pod, mock_logs, mock_find_priv, mock_last_job, mock_save_job):
     mock_last_pod.return_value = "pod-last"
     mock_last_job.return_value = "job-last-saved"
     mock_find_priv.return_value = None
@@ -1719,13 +1853,15 @@ class TestRunPodShellCLI(unittest.TestCase):
         ssh_config_path=None,
         verbose=False
     )
+    mock_save_job.assert_not_called()
 
+  @patch("xpu_shell.cli.save_last_job_id")
   @patch("xpu_shell.cli.clear_last_job_id_if_match")
   @patch("xpu_shell.cli.find_ssh_private_key")
   @patch("xpu_shell.cli.kill_remote_job")
   @patch("xpu_shell.cli.get_last_pod_id")
   @patch("runpod.get_pod")
-  def test_kill_with_job_flag(self, mock_get_pod, mock_last_pod, mock_kill, mock_find_priv, mock_clear_job):
+  def test_kill_with_job_flag(self, mock_get_pod, mock_last_pod, mock_kill, mock_find_priv, mock_clear_job, mock_save_job):
     mock_last_pod.return_value = "pod-last"
     mock_find_priv.return_value = None
     mock_get_pod.return_value = {
@@ -1748,14 +1884,16 @@ class TestRunPodShellCLI(unittest.TestCase):
         ssh_config_path=None
     )
     mock_clear_job.assert_called_once_with("job-kill-1")
+    mock_save_job.assert_not_called()
 
+  @patch("xpu_shell.cli.save_last_job_id")
   @patch("xpu_shell.cli.get_last_job_id")
   @patch("xpu_shell.cli.clear_last_job_id_if_match")
   @patch("xpu_shell.cli.find_ssh_private_key")
   @patch("xpu_shell.cli.kill_remote_job")
   @patch("xpu_shell.cli.get_last_pod_id")
   @patch("runpod.get_pod")
-  def test_kill_with_last_job_id(self, mock_get_pod, mock_last_pod, mock_kill, mock_find_priv, mock_clear_job, mock_last_job):
+  def test_kill_with_last_job_id(self, mock_get_pod, mock_last_pod, mock_kill, mock_find_priv, mock_clear_job, mock_last_job, mock_save_job):
     mock_last_pod.return_value = "pod-last"
     mock_last_job.return_value = "job-last-killed"
     mock_find_priv.return_value = None
@@ -1779,6 +1917,7 @@ class TestRunPodShellCLI(unittest.TestCase):
         ssh_config_path=None
     )
     mock_clear_job.assert_called_once_with("job-last-killed")
+    mock_save_job.assert_not_called()
 
   @patch("runpod.stop_pod")
   def test_stop_with_pod_short_flag(self, mock_stop):
