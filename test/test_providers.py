@@ -32,7 +32,22 @@ from xpu_shell.providers.lium_provider import (
 )
 
 
-class TestProviders(unittest.TestCase):
+class BaseProviderTestCase(unittest.TestCase):
+
+  def setUp(self):
+    self._temp_dir = tempfile.TemporaryDirectory()
+    self._env_patcher = patch.dict(os.environ, {
+        "XPU_SHELL_CONFIG_DIR": self._temp_dir.name,
+        "RUNPOD_SHELL_CONFIG_DIR": self._temp_dir.name
+    })
+    self._env_patcher.start()
+
+  def tearDown(self):
+    self._env_patcher.stop()
+    self._temp_dir.cleanup()
+
+
+class TestProviders(BaseProviderTestCase):
 
   def test_parse_instance_identifier(self):
     prov, pid = parse_instance_identifier("runpod:abc-123")
@@ -186,7 +201,7 @@ class TestProviders(unittest.TestCase):
         self.assertIsInstance(p, RunPodProvider)
 
 
-class TestRunPodProvider(unittest.TestCase):
+class TestRunPodProvider(BaseProviderTestCase):
 
   @patch("runpod.get_pods")
   def test_list_instances(self, mock_get_pods):
@@ -226,7 +241,7 @@ class TestRunPodProvider(unittest.TestCase):
     self.assertEqual(port, 2222)
 
 
-class TestVastProvider(unittest.TestCase):
+class TestVastProvider(BaseProviderTestCase):
 
   @patch("requests.Session.request")
   def test_list_instances(self, mock_req):
@@ -402,7 +417,7 @@ class TestVastProvider(unittest.TestCase):
     self.assertTrue(any(t.id == "image:pytorch/pytorch:latest" for t in tpls))
 
 
-class TestVastCLIIntegration(unittest.TestCase):
+class TestVastCLIIntegration(BaseProviderTestCase):
 
   @patch("xpu_shell.cli.resolve_provider")
   @patch("sys.stdout")
@@ -732,7 +747,7 @@ class TestVastCLIIntegration(unittest.TestCase):
     self.assertIsNone(mock_create_inst.call_args[1]["image_name"])
 
 
-class TestSpheronProvider(unittest.TestCase):
+class TestSpheronProvider(BaseProviderTestCase):
 
   @patch("requests.Session.request")
   def test_list_instances(self, mock_req):
@@ -1203,7 +1218,7 @@ class TestSpheronProvider(unittest.TestCase):
     self.assertIn('"deploymentId": "spheron-auto-1"', mock_print.call_args[0][0])
 
 
-class TestCloudRiftProvider(unittest.TestCase):
+class TestCloudRiftProvider(BaseProviderTestCase):
 
   @patch("requests.Session.request")
   def test_list_instances(self, mock_req):
