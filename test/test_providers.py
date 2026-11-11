@@ -438,7 +438,7 @@ class TestVastCLIIntegration(BaseProviderTestCase):
     ]
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "list"]
+    test_args = ["cli.py", "list", "--provider", "vast", "--api-key", "fake-key"]
     with patch.object(sys, "argv", test_args):
       cli.main()
 
@@ -454,7 +454,7 @@ class TestVastCLIIntegration(BaseProviderTestCase):
     mock_prov.name = "vast"
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "stop", "--pod", "12345"]
+    test_args = ["cli.py", "stop", "--provider", "vast", "--api-key", "fake-key", "--pod", "12345"]
     with patch.object(sys, "argv", test_args):
       cli.main()
 
@@ -466,7 +466,7 @@ class TestVastCLIIntegration(BaseProviderTestCase):
     mock_prov.name = "vast"
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "terminate", "--pod", "12345"]
+    test_args = ["cli.py", "terminate", "--provider", "vast", "--api-key", "fake-key", "--pod", "12345"]
     with patch.object(sys, "argv", test_args):
       cli.main()
 
@@ -482,9 +482,9 @@ class TestVastCLIIntegration(BaseProviderTestCase):
 
     test_args = [
         "cli.py",
+        "exec",
         "--provider", "vast",
         "--api-key", "fake-key",
-        "exec",
         "--pod", "12345",
         "train.py",
         "--ssh-config", "/dev/null"
@@ -528,7 +528,7 @@ class TestVastCLIIntegration(BaseProviderTestCase):
     )
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "info", "-p", "58842137"]
+    test_args = ["cli.py", "info", "--provider", "vast", "--api-key", "fake-key", "-p", "58842137"]
     with patch.object(sys, "argv", test_args):
       with patch("builtins.print") as mock_print:
         cli.main()
@@ -554,7 +554,7 @@ class TestVastCLIIntegration(BaseProviderTestCase):
     )
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "info", "--json", "58842137"]
+    test_args = ["cli.py", "info", "--provider", "vast", "--api-key", "fake-key", "--json", "58842137"]
     with patch.object(sys, "argv", test_args):
       with patch("builtins.print") as mock_print:
         cli.main()
@@ -580,7 +580,7 @@ class TestVastCLIIntegration(BaseProviderTestCase):
     ]
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "gpus"]
+    test_args = ["cli.py", "gpus", "--provider", "vast", "--api-key", "fake-key"]
     with patch.object(sys, "argv", test_args):
       cli.main()
 
@@ -611,7 +611,7 @@ class TestVastCLIIntegration(BaseProviderTestCase):
     ]
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "gpus", "-l", "4090"]
+    test_args = ["cli.py", "gpus", "--provider", "vast", "--api-key", "fake-key", "-l", "4090"]
     with patch.object(sys, "argv", test_args):
       cli.main()
 
@@ -685,9 +685,17 @@ class TestVastCLIIntegration(BaseProviderTestCase):
           cli.main()
         self.assertEqual(ctx.exception.code, 2)
 
+  def test_rejects_global_provider(self):
+    test_args = ["cli.py", "--provider", "runpod", "create"]
+    with patch.object(sys, "argv", test_args):
+      with patch("sys.stderr"):
+        with self.assertRaises(SystemExit) as ctx:
+          cli.main()
+        self.assertEqual(ctx.exception.code, 2)
+
   @patch("sys.stdout")
   def test_vast_cli_templates(self, mock_stdout):
-    test_args = ["cli.py", "--provider", "vast", "--api-key", "fake-key", "templates"]
+    test_args = ["cli.py", "templates", "--provider", "vast", "--api-key", "fake-key"]
     with patch.object(sys, "argv", test_args):
       cli.main()
     calls = [call[0][0] for call in mock_stdout.write.call_args_list if call[0]]
@@ -1121,7 +1129,7 @@ class TestSpheronProvider(BaseProviderTestCase):
     ]
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "spheron", "--api-key", "fake-key", "gpus"]
+    test_args = ["cli.py", "gpus", "--provider", "spheron", "--api-key", "fake-key"]
     with patch.object(sys, "argv", test_args):
       cli.main()
 
@@ -1182,7 +1190,7 @@ class TestSpheronProvider(BaseProviderTestCase):
     )
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "spheron", "--api-key", "fake-key", "info", "-p", "spheron-auto-1"]
+    test_args = ["cli.py", "info", "--provider", "spheron", "--api-key", "fake-key", "-p", "spheron-auto-1"]
     with patch.object(sys, "argv", test_args):
       with patch("builtins.print") as mock_print:
         cli.main()
@@ -1208,7 +1216,7 @@ class TestSpheronProvider(BaseProviderTestCase):
     )
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "spheron", "--api-key", "fake-key", "info", "--json", "spheron-auto-1"]
+    test_args = ["cli.py", "info", "--provider", "spheron", "--api-key", "fake-key", "--json", "spheron-auto-1"]
     with patch.object(sys, "argv", test_args):
       with patch("builtins.print") as mock_print:
         cli.main()
@@ -1468,7 +1476,7 @@ class TestCloudRiftProvider(BaseProviderTestCase):
     )
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "cloudrift", "--api-key", "fake-cr-key", "info", "-p", "cr-auto-1"]
+    test_args = ["cli.py", "info", "--provider", "cloudrift", "--api-key", "fake-cr-key", "-p", "cr-auto-1"]
     with patch.object(sys, "argv", test_args):
       with patch("builtins.print") as mock_print:
         cli.main()
@@ -1746,7 +1754,7 @@ class TestCloudRiftProvider(BaseProviderTestCase):
     )
     mock_resolve_prov.return_value = mock_prov
 
-    test_args = ["cli.py", "--provider", "lium", "--api-key", "fake-lium-key", "info", "-p", "pod-cli-test"]
+    test_args = ["cli.py", "info", "--provider", "lium", "--api-key", "fake-lium-key", "-p", "pod-cli-test"]
     with patch.object(sys, "argv", test_args):
       with patch("builtins.print") as mock_print:
         cli.main()

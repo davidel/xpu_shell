@@ -2195,26 +2195,28 @@ def main(args=None):
       "--api-key",
       help="API Key (can also be set via RUNPOD_API_KEY, VAST_API_KEY, SPHERON_API_KEY, CLOUDRIFT_API_KEY, or LIUM_API_KEY environment variable)"
   )
-  parser.add_argument(
+
+  subparser_parent = argparse.ArgumentParser(add_help=False)
+  subparser_parent.add_argument(
       "--provider",
       help="Target provider ('runpod', 'vast', 'spheron', 'cloudrift', or 'lium'). Default: auto-detect or runpod.",
       default=None
+  )
+  subparser_parent.add_argument(
+      "--api-key",
+      help="API Key (can also be set via RUNPOD_API_KEY, VAST_API_KEY, SPHERON_API_KEY, CLOUDRIFT_API_KEY, or LIUM_API_KEY environment variable)",
+      default=argparse.SUPPRESS
   )
 
   subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommands")
 
   # Create Command
-  create_parser = subparsers.add_parser("create", help="Create and launch a new instance")
+  create_parser = subparsers.add_parser("create", parents=[subparser_parent], help="Create and launch a new instance")
   create_parser.add_argument(
       "-t",
       "--template",
       default=None,
       help="Template or image identifier (e.g. 'template:<id>' or 'image:<name>')."
-  )
-  create_parser.add_argument(
-      "--provider",
-      help="Target provider ('runpod', 'vast', 'spheron', 'cloudrift', or 'lium'). Default: auto-detect or runpod.",
-      default=None
   )
   create_parser.add_argument(
       "--name",
@@ -2378,7 +2380,7 @@ def main(args=None):
         pass
 
   # Exec Command
-  exec_parser = subparsers.add_parser("exec", help="Execute a local script on an active XPU instance via SSH")
+  exec_parser = subparsers.add_parser("exec", parents=[subparser_parent], help="Execute a local script on an active XPU instance via SSH")
   exec_parser.add_argument(
       "-p",
       "--pod",
@@ -2459,7 +2461,7 @@ def main(args=None):
   )
 
   # Run Command
-  run_parser = subparsers.add_parser("run", help="Run a command directly (binary + args) on an active XPU instance via SSH")
+  run_parser = subparsers.add_parser("run", parents=[subparser_parent], help="Run a command directly (binary + args) on an active XPU instance via SSH")
   run_parser.add_argument(
       "-p",
       "--pod",
@@ -2536,7 +2538,7 @@ def main(args=None):
   )
 
   # Cp Command
-  cp_parser = subparsers.add_parser("cp", help="Copy files or directories between a local path and an XPU instance via SCP or Rsync")
+  cp_parser = subparsers.add_parser("cp", parents=[subparser_parent], help="Copy files or directories between a local path and an XPU instance via SCP or Rsync")
   cp_parser.add_argument(
       "-p",
       "--pod",
@@ -2640,7 +2642,7 @@ def main(args=None):
   )
 
   # Rsync Command
-  rsync_parser = subparsers.add_parser("rsync", help="Synchronize files or directories between a local path and an XPU instance via rsync over SSH")
+  rsync_parser = subparsers.add_parser("rsync", parents=[subparser_parent], help="Synchronize files or directories between a local path and an XPU instance via rsync over SSH")
   rsync_parser.add_argument(
       "-p",
       "--pod",
@@ -2743,7 +2745,7 @@ def main(args=None):
   )
 
   # Ps Command
-  ps_parser = subparsers.add_parser("ps", help="List remote processes and managed jobs on an XPU instance")
+  ps_parser = subparsers.add_parser("ps", parents=[subparser_parent], help="List remote processes and managed jobs on an XPU instance")
   ps_parser.add_argument(
       "-p",
       "--pod",
@@ -2770,7 +2772,7 @@ def main(args=None):
   )
 
   # Logs Command
-  logs_parser = subparsers.add_parser("logs", help="View remote logs of managed jobs on an XPU instance")
+  logs_parser = subparsers.add_parser("logs", parents=[subparser_parent], help="View remote logs of managed jobs on an XPU instance")
   logs_parser.add_argument(
       "-p",
       "--pod",
@@ -2833,7 +2835,7 @@ def main(args=None):
   )
 
   # Kill Command
-  kill_parser = subparsers.add_parser("kill", help="Kill a remote job or process on an XPU instance")
+  kill_parser = subparsers.add_parser("kill", parents=[subparser_parent], help="Kill a remote job or process on an XPU instance")
   kill_parser.add_argument(
       "-p",
       "--pod",
@@ -2888,10 +2890,10 @@ def main(args=None):
   )
 
   # List Command
-  subparsers.add_parser("list", help="List all your XPU instances")
+  subparsers.add_parser("list", parents=[subparser_parent], help="List all your XPU instances")
 
   # Info Command
-  info_parser = subparsers.add_parser("info", help="Show detailed information about an XPU instance")
+  info_parser = subparsers.add_parser("info", parents=[subparser_parent], help="Show detailed information about an XPU instance")
   info_parser.add_argument(
       "-p",
       "--pod",
@@ -2914,7 +2916,7 @@ def main(args=None):
   )
 
   # Stop Command
-  stop_parser = subparsers.add_parser("stop", help="Stop a running XPU instance")
+  stop_parser = subparsers.add_parser("stop", parents=[subparser_parent], help="Stop a running XPU instance")
   stop_parser.add_argument(
       "-p",
       "--pod",
@@ -2930,7 +2932,7 @@ def main(args=None):
   )
 
   # Terminate Command
-  terminate_parser = subparsers.add_parser("terminate", help="Terminate (delete) an XPU instance")
+  terminate_parser = subparsers.add_parser("terminate", parents=[subparser_parent], help="Terminate (delete) an XPU instance")
   terminate_parser.add_argument(
       "-p",
       "--pod",
@@ -2946,7 +2948,7 @@ def main(args=None):
   )
 
   # Gpus Command
-  gpus_parser = subparsers.add_parser("gpus", help="List all available GPU types and details on XPU")
+  gpus_parser = subparsers.add_parser("gpus", parents=[subparser_parent], help="List all available GPU types and details on XPU")
   gpus_parser.add_argument(
       "filter",
       nargs="?",
@@ -2971,7 +2973,7 @@ def main(args=None):
   )
 
   # Templates Command
-  templates_parser = subparsers.add_parser("templates", help="List available templates and images on XPU")
+  templates_parser = subparsers.add_parser("templates", parents=[subparser_parent], help="List available templates and images on XPU")
   templates_parser.add_argument(
       "filter",
       nargs="?",
@@ -2988,7 +2990,7 @@ def main(args=None):
   )
 
   # Proxy Command
-  proxy_parser = subparsers.add_parser("proxy", help="Manage auth-injecting proxies and SSH reverse tunnels for XPU instances")
+  proxy_parser = subparsers.add_parser("proxy", parents=[subparser_parent], help="Manage auth-injecting proxies and SSH reverse tunnels for XPU instances")
   proxy_parser.add_argument(
       "proxy_action",
       choices=["start", "stop", "status", "list"],
