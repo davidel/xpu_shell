@@ -238,6 +238,28 @@ class TestRunPodShellCLI(unittest.TestCase):
       cli.main()
     mock_stdout.write.assert_any_call("RTX 4090                       | RTX 4090                  | 24        | N/A | N/A     | N/A      ")
 
+  @patch("xpu_shell.cli.run_graphql")
+  @patch("sys.stdout")
+  def test_gpus_command_none_values(self, mock_stdout, mock_run_graphql):
+    mock_run_graphql.return_value = {
+        "data": {
+            "gpuTypes": [
+                {
+                    "id": "NVIDIA GeForce RTX 5090",
+                    "displayName": "RTX 5090",
+                    "memoryInGb": 32,
+                    "maxGpuCount": None,
+                    "securePrice": 1.19,
+                    "communityPrice": 0.69,
+                }
+            ]
+        }
+    }
+    test_args = ["cli.py", "gpus", "5090"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+    mock_stdout.write.assert_any_call("NVIDIA GeForce RTX 5090        | RTX 5090                  | 32        | N/A | $1.19/h | $0.69/h  ")
+
   @patch("runpod.get_gpus")
   @patch("sys.stdout")
   def test_gpus_command_regex_match_id(self, mock_stdout, mock_get_gpus):

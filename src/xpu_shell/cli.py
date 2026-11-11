@@ -2053,17 +2053,19 @@ def cmd_gpus(args):
   print(f"{'GPU ID':<30} | {'DISPLAY NAME':<25} | {'VRAM (GB)':<9} | {'MAX':<3} | {'SECURE':<7} | {'COMMUNITY':<9}")
   print("-" * 98)
   for g in gpus:
-    gpu_id = g.get("id", "N/A")
-    display_name = g.get("displayName", "N/A")
-    ram = g.get("memoryInGb", "N/A")
-    max_gpus = g.get("maxGpuCount", "N/A")
+    gpu_id = g.get("id") or "N/A"
+    display_name = g.get("displayName") or "N/A"
+    ram = g.get("memoryInGb")
+    ram_str = f"{ram}" if ram is not None else "N/A"
+    max_gpus = g.get("maxGpuCount")
+    max_gpus_str = f"{max_gpus}" if max_gpus is not None else "N/A"
     sec_price = g.get("securePrice")
     comm_price = g.get("communityPrice")
 
     sec_price_str = f"${sec_price:.2f}/h" if isinstance(sec_price, (int, float)) else "N/A"
     comm_price_str = f"${comm_price:.2f}/h" if isinstance(comm_price, (int, float)) else "N/A"
 
-    print(f"{gpu_id:<30} | {display_name:<25} | {ram:<9} | {max_gpus:<3} | {sec_price_str:<7} | {comm_price_str:<9}")
+    print(f"{gpu_id:<30} | {display_name:<25} | {ram_str:<9} | {max_gpus_str:<3} | {sec_price_str:<7} | {comm_price_str:<9}")
 
 
 def get_pod_template(template_id):
