@@ -8,34 +8,70 @@ from xpu_shell.providers.base import (
     Instance,
     Template,
     format_template_identifier,
+    parse_ssh_command,
     parse_template_identifier
 )
 
 
 def get_pod_ssh_endpoint(pod_info: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[int]]:
-  runtime = pod_info.get("runtime", {}) if pod_info else {}
-  ports = runtime.get("ports", []) if runtime else []
-  ssh_port = None
+  if not pod_info or not isinstance(pod_info, dict):
+    return None, None
+
   ssh_host = None
+  ssh_port = None
 
-  if isinstance(ports, list):
-    for p in ports:
-      if p.get("privatePort") == 22:
-        ssh_port = p.get("publicPort") or p.get("isExternal")
-        ssh_host = p.get("ip") or p.get("address")
-        break
+  ssh_block = pod_info.get("ssh")
+  if isinstance(ssh_block, dict):
+    direct = ssh_block.get("direct")
+    if isinstance(direct, dict):
+      ssh_host = direct.get("host")
+      ssh_port = direct.get("port")
+      if not ssh_host or not ssh_port:
+        c_host, c_port = parse_ssh_command(direct.get("command"))
+        ssh_host = ssh_host or c_host
+        ssh_port = ssh_port or c_port
 
-  if not ssh_host and pod_info:
-    ssh_host = pod_info.get("ipAddress") or pod_info.get("address")
+  if not ssh_host or not ssh_port:
+    runtime = pod_info.get("runtime") or {}
+    ports = runtime.get("ports") or []
+    if isinstance(ports, list):
+      for p in ports:
+        if not isinstance(p, dict):
+          continue
+        priv = p.get("private") if p.get("private") is not None else p.get("privatePort")
+        if priv == 22:
+          pub = p.get("public") if p.get("public") is not None else p.get("publicPort")
+          if pub is None:
+            pub = p.get("isExternal")
+          ssh_port = pub
+          ssh_host = p.get("ip") or p.get("address")
+          break
 
-  if not ssh_port and isinstance(ports, dict):
-    ssh_port = ports.get("publicPort") or ports.get("isExternal")
+    if not ssh_host:
+      ssh_host = pod_info.get("ipAddress") or pod_info.get("address")
+
+    if not ssh_port and isinstance(ports, dict):
+      ssh_port = ports.get("public") or ports.get("publicPort") or ports.get("isExternal")
+
+  if not ssh_host or not ssh_port:
+    ssh_block = pod_info.get("ssh")
+    if isinstance(ssh_block, dict):
+      proxy = ssh_block.get("proxy")
+      if isinstance(proxy, dict):
+        p_host = proxy.get("host")
+        p_port = proxy.get("port")
+        if not p_host or not p_port:
+          c_host, c_port = parse_ssh_command(proxy.get("command"))
+          p_host = p_host or c_host
+          p_port = p_port or c_port
+        ssh_host = ssh_host or p_host
+        ssh_port = ssh_port or p_port
 
   if ssh_port is not None:
     try:
       ssh_port = int(ssh_port)
     except (ValueError, TypeError):
-      pass
+      ssh_port = None
 
   return ssh_host, ssh_port
 
@@ -44,12 +80,30 @@ def normalize_runpod_instance(pod: Dict[str, Any]) -> Instance:
   ssh_host, ssh_port = get_pod_ssh_endpoint(pod)
   status = pod.get("desiredStatus") or pod.get("status") or "UNKNOWN"
   machine = pod.get("machine") or {}
-  gpu_name = machine.get("gpuDisplayName") or pod.get("gpuType")
-  gpu_count = pod.get("gpuCount") or machine.get("gpuCount") or 1
-  cost = pod.get("costPerHr")
-  vcpu = pod.get("vcpuCount")
-  mem = pod.get("memoryInGb")
-  disk = pod.get("containerDiskInGb") or pod.get("volumeInGb")
+  gpu_info = pod.get("gpu") if isinstance(pod.get("gpu"), dict) else {}
+  cpu_info = pod.get("cpu") if isinstance(pod.get("cpu"), dict) else {}
+
+  gpu_count = pod.get("gpuCount")
+  if gpu_count is None and "count" in gpu_info:
+    gpu_count = gpu_info.get("count")
+  if gpu_count is None and machine.get("gpuCount") is not None:
+    gpu_count = machine.get("gpuCount")
+  if gpu_count is None:
+    gpu_count = 1 if (machine.get("gpuDisplayName") or pod.get("gpuType") or gpu_info.get("id")) else 0
+
+  gpu_name = (
+      machine.get("gpuDisplayName")
+      or pod.get("gpuType")
+      or gpu_info.get("id")
+  )
+  if gpu_count == 0:
+    gpu_name = None
+
+  cost = pod.get("costPerHr") if pod.get("costPerHr") is not None else pod.get("cost")
+  vcpu = pod.get("vcpuCount") or cpu_info.get("vcpuCount") or gpu_info.get("vcpuCount")
+  mem = pod.get("memoryInGb") or cpu_info.get("memory") or gpu_info.get("memory")
+  disk = pod.get("containerDiskInGb") or pod.get("volumeInGb") or pod.get("disk")
+  image = pod.get("imageName") or pod.get("image")
 
   return Instance(
       id=str(pod.get("id")),
@@ -64,7 +118,7 @@ def normalize_runpod_instance(pod: Dict[str, Any]) -> Instance:
       vcpu_count=int(vcpu) if vcpu is not None else None,
       memory_gb=float(mem) if mem is not None else None,
       disk_gb=float(disk) if disk is not None else None,
-      image_name=pod.get("imageName"),
+      image_name=image,
       raw=pod
   )
 
@@ -130,7 +184,20 @@ class RunPodProvider(BaseProvider):
 
   def list_instances(self) -> List[Instance]:
     pods = runpod.get_pods() or []
-    return [normalize_runpod_instance(p) for p in pods]
+    instances = []
+    for p in pods:
+      inst = normalize_runpod_instance(p)
+      if inst.status == "RUNNING" and ((not inst.ssh_host or not inst.ssh_port) or inst.ssh_host == "ssh.runpod.io") and inst.id:
+        try:
+          detailed = runpod.get_pod(inst.id)
+          if detailed:
+            d_inst = normalize_runpod_instance(detailed)
+            if d_inst.ssh_host and d_inst.ssh_port:
+              inst = d_inst
+        except Exception:
+          pass
+      instances.append(inst)
+    return instances
 
   def get_instance(self, instance_id: str) -> Instance:
     pod = runpod.get_pod(instance_id)

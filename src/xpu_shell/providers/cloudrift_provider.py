@@ -10,6 +10,7 @@ from xpu_shell.providers.base import (
     Instance,
     Template,
     format_template_identifier,
+    parse_ssh_command,
     parse_template_identifier
 )
 
@@ -69,6 +70,13 @@ def extract_cloudrift_ssh_endpoint(data: Dict[str, Any]) -> Tuple[Optional[str],
 
   if ssh_port is None:
     ssh_port = data.get("ssh_port") or data.get("port")
+
+  if not ssh_host or not ssh_port:
+    cmd = data.get("ssh_cmd") or data.get("ssh_command") or data.get("ssh_connect_cmd")
+    if cmd and isinstance(cmd, str):
+      c_host, c_port = parse_ssh_command(cmd)
+      ssh_host = ssh_host or c_host
+      ssh_port = ssh_port or c_port
 
   if ssh_host and ssh_port is None:
     ssh_port = 22
@@ -253,13 +261,13 @@ class CloudRiftProvider(BaseProvider):
         }
     }
     data = self._request("POST", "/api/v1/instances/list", data=payload)
-    instances = []
+    raw_instances = []
     if isinstance(data, dict):
-      instances = data.get("instances") or []
+      raw_instances = data.get("instances") or []
     elif isinstance(data, list):
-      instances = data
+      raw_instances = data
 
-    return [normalize_cloudrift_instance(item) for item in instances if isinstance(item, dict)]
+    return [normalize_cloudrift_instance(item) for item in raw_instances if isinstance(item, dict)]
 
   def get_instance(self, instance_id: str) -> Instance:
     clean_id = str(instance_id).strip()

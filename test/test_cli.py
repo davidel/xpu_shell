@@ -1171,6 +1171,107 @@ class TestRunPodShellCLI(unittest.TestCase):
     self.assertEqual(host, "1.2.3.4")
     self.assertEqual(port, 54321)
 
+  def test_get_pod_ssh_endpoint_v2_direct(self):
+    pod_info = {
+        "ssh": {
+            "direct": {
+                "host": "69.30.85.106",
+                "port": 19481,
+                "username": "root"
+            }
+        }
+    }
+    host, port = cli.get_pod_ssh_endpoint(pod_info)
+    self.assertEqual(host, "69.30.85.106")
+    self.assertEqual(port, 19481)
+
+  def test_get_pod_ssh_endpoint_v2_runtime_ports(self):
+    pod_info = {
+        "runtime": {
+            "ports": [
+                {
+                    "ip": "69.30.85.106",
+                    "private": 22,
+                    "public": 19481,
+                    "type": "tcp"
+                }
+            ]
+        }
+    }
+    host, port = cli.get_pod_ssh_endpoint(pod_info)
+    self.assertEqual(host, "69.30.85.106")
+    self.assertEqual(port, 19481)
+
+  def test_get_pod_ssh_endpoint_v2_proxy(self):
+    pod_info = {
+        "ssh": {
+            "direct": None,
+            "proxy": {
+                "host": "ssh.runpod.io",
+                "port": 22,
+                "username": "token-123"
+            }
+        }
+    }
+    host, port = cli.get_pod_ssh_endpoint(pod_info)
+    self.assertEqual(host, "ssh.runpod.io")
+    self.assertEqual(port, 22)
+
+  def test_get_pod_ssh_endpoint_v2_command_fallback(self):
+    pod_info = {
+        "ssh": {
+            "direct": {
+                "command": "ssh root@69.30.85.106 -p 19481"
+            }
+        }
+    }
+    host, port = cli.get_pod_ssh_endpoint(pod_info)
+    self.assertEqual(host, "69.30.85.106")
+    self.assertEqual(port, 19481)
+
+  @patch("runpod.get_pod")
+  @patch("runpod.get_pods")
+  @patch("sys.stdout")
+  def test_cmd_list_with_v2_lazy_pod_detail_fetch(self, mock_stdout, mock_get_pods, mock_get_pod):
+    mock_get_pods.return_value = [
+        {
+            "id": "yctwzt7oq39vnt",
+            "name": "SCDIAG",
+            "status": "RUNNING",
+            "cpu": {
+                "id": "cpu5c",
+                "vcpuCount": 4
+            },
+            "runtime": None,
+            "ssh": {
+                "direct": None,
+                "proxy": {
+                    "host": "ssh.runpod.io",
+                    "port": 22
+                }
+            }
+        }
+    ]
+    mock_get_pod.return_value = {
+        "id": "yctwzt7oq39vnt",
+        "name": "SCDIAG",
+        "status": "RUNNING",
+        "ssh": {
+            "direct": {
+                "host": "69.30.85.106",
+                "port": 19481
+            }
+        }
+    }
+    test_args = ["cli.py", "--api-key", "fake-api-key", "list"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+    calls = [call[0][0] for call in mock_stdout.write.call_args_list if call[0]]
+    output = "".join(calls)
+    self.assertIn("69.30.85.106:19481", output)
+    self.assertIn("CPU only", output)
+    mock_get_pod.assert_called_once_with("yctwzt7oq39vnt")
+
   @patch("runpod.get_pods")
   @patch("sys.stdout")
   def test_cmd_list_with_graphql_endpoint(self, mock_stdout, mock_get_pods):

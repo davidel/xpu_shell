@@ -7,7 +7,8 @@ from xpu_shell.providers.base import (
     Instance,
     Template,
     parse_template_identifier,
-    format_template_identifier
+    format_template_identifier,
+    parse_ssh_command
 )
 from xpu_shell.providers.runpod_provider import RunPodProvider
 from xpu_shell.providers.vast_provider import VastProvider

@@ -9,6 +9,7 @@ from xpu_shell.providers.base import (
     Instance,
     Template,
     format_template_identifier,
+    parse_ssh_command,
     parse_template_identifier
 )
 
@@ -72,6 +73,13 @@ def extract_ssh_endpoint(data: Dict[str, Any]) -> Tuple[Optional[str], Optional[
 
   if ssh_port is None:
     ssh_port = data.get("sshPort") or data.get("port")
+
+  if not ssh_host or not ssh_port:
+    cmd = data.get("sshCmd") or data.get("sshCommand") or data.get("connectionString")
+    if cmd and isinstance(cmd, str):
+      c_host, c_port = parse_ssh_command(cmd)
+      ssh_host = ssh_host or c_host
+      ssh_port = ssh_port or c_port
 
   if ssh_host and ssh_port is None:
     ssh_port = 22

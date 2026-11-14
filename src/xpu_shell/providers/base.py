@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -61,6 +62,40 @@ def parse_template_identifier(spec: Optional[str]) -> Tuple[Optional[str], Optio
   if "/" in spec or ":" in spec or spec.lower().startswith("ubuntu") or spec.lower().startswith("debian"):
     return "image", spec
   return "template", spec
+
+
+def parse_ssh_command(cmd: Optional[str]) -> Tuple[Optional[str], Optional[int]]:
+  """Parse an SSH command line invocation into (host, port)."""
+  if not cmd or not isinstance(cmd, str):
+    return None, None
+
+  host = None
+  port = None
+
+  port_m = re.search(r"-p\s*(\d+)", cmd)
+  if port_m:
+    try:
+      port = int(port_m.group(1))
+    except (ValueError, TypeError):
+      port = None
+
+  cleaned = re.sub(r"-[a-zA-Z]\s+[^\s]+", "", cmd)
+  tokens = [t for t in cleaned.split() if t != "ssh" and not t.startswith("-")]
+  for t in tokens:
+    if "@" in t:
+      host = t.split("@", 1)[1].strip()
+      break
+    elif "." in t or ":" in t:
+      host = t.strip()
+      break
+
+  if not host and tokens:
+    host = tokens[-1].strip()
+
+  if host and port is None:
+    port = 22
+
+  return host, port
 
 
 class BaseProvider(ABC):

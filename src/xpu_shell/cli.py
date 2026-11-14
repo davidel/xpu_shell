@@ -33,7 +33,8 @@ from xpu_shell.providers import (
     get_last_provider,
     parse_instance_identifier,
     parse_template_identifier,
-    format_template_identifier
+    format_template_identifier,
+    parse_ssh_command
 )
 from xpu_shell.proxy_manager import (
     start_proxy_for_pod,
@@ -518,23 +519,64 @@ def resolve_gpu_type(user_input, valid_gpus):
 
 
 def get_pod_ssh_endpoint(pod_info):
-  runtime = pod_info.get("runtime", {}) if pod_info else {}
-  ports = runtime.get("ports", []) if runtime else []
-  ssh_port = None
+  if not pod_info or not isinstance(pod_info, dict):
+    return None, None
+
   ssh_host = None
+  ssh_port = None
 
-  if isinstance(ports, list):
-    for p in ports:
-      if p.get("privatePort") == 22:
-        ssh_port = p.get("publicPort") or p.get("isExternal")
-        ssh_host = p.get("ip") or p.get("address")
-        break
+  ssh_block = pod_info.get("ssh")
+  if isinstance(ssh_block, dict):
+    direct = ssh_block.get("direct")
+    if isinstance(direct, dict):
+      ssh_host = direct.get("host")
+      ssh_port = direct.get("port")
+      if not ssh_host or not ssh_port:
+        c_host, c_port = parse_ssh_command(direct.get("command"))
+        ssh_host = ssh_host or c_host
+        ssh_port = ssh_port or c_port
 
-  if not ssh_host and pod_info:
-    ssh_host = pod_info.get("ipAddress") or pod_info.get("address")
+  if not ssh_host or not ssh_port:
+    runtime = pod_info.get("runtime") or {}
+    ports = runtime.get("ports") or []
+    if isinstance(ports, list):
+      for p in ports:
+        if not isinstance(p, dict):
+          continue
+        priv = p.get("private") if p.get("private") is not None else p.get("privatePort")
+        if priv == 22:
+          pub = p.get("public") if p.get("public") is not None else p.get("publicPort")
+          if pub is None:
+            pub = p.get("isExternal")
+          ssh_port = pub
+          ssh_host = p.get("ip") or p.get("address")
+          break
 
-  if not ssh_port and isinstance(ports, dict):
-    ssh_port = ports.get("publicPort") or ports.get("isExternal")
+    if not ssh_host:
+      ssh_host = pod_info.get("ipAddress") or pod_info.get("address")
+
+    if not ssh_port and isinstance(ports, dict):
+      ssh_port = ports.get("public") or ports.get("publicPort") or ports.get("isExternal")
+
+  if not ssh_host or not ssh_port:
+    ssh_block = pod_info.get("ssh")
+    if isinstance(ssh_block, dict):
+      proxy = ssh_block.get("proxy")
+      if isinstance(proxy, dict):
+        p_host = proxy.get("host")
+        p_port = proxy.get("port")
+        if not p_host or not p_port:
+          c_host, c_port = parse_ssh_command(proxy.get("command"))
+          p_host = p_host or c_host
+          p_port = p_port or c_port
+        ssh_host = ssh_host or p_host
+        ssh_port = ssh_port or p_port
+
+  if ssh_port is not None:
+    try:
+      ssh_port = int(ssh_port)
+    except (ValueError, TypeError):
+      ssh_port = None
 
   return ssh_host, ssh_port
 
@@ -1403,14 +1445,23 @@ def cmd_list(args):
 
       # Extract GPU info
       machine_info = p.get("machine") or {}
+      gpu_info = p.get("gpu") if isinstance(p.get("gpu"), dict) else {}
       gpu_type = (
           machine_info.get("gpuDisplayName")
           or p.get("gpuDisplayName")
           or p.get("gpuName")
           or p.get("gpuTypeId")
+          or gpu_info.get("id")
           or "GPU"
       )
-      gpu_count = p.get("gpuCount", 0)
+      gpu_count = p.get("gpuCount")
+      if gpu_count is None and "count" in gpu_info:
+        gpu_count = gpu_info.get("count")
+      if gpu_count is None and machine_info.get("gpuCount") is not None:
+        gpu_count = machine_info.get("gpuCount")
+      if gpu_count is None:
+        gpu_count = 1 if (machine_info.get("gpuDisplayName") or p.get("gpuDisplayName") or p.get("gpuName") or p.get("gpuTypeId") or gpu_info.get("id")) else 0
+
       if gpu_count > 0:
         gpu_display = f"{gpu_count}x {gpu_type}"
       else:
@@ -1418,6 +1469,15 @@ def cmd_list(args):
 
       # Extract SSH endpoint
       host, port = get_pod_ssh_endpoint(p)
+      if ((not host or not port) or host == "ssh.runpod.io") and status == "RUNNING" and pod_id != "N/A":
+        try:
+          pod_detail = runpod.get_pod(pod_id)
+          if pod_detail:
+            d_host, d_port = get_pod_ssh_endpoint(pod_detail)
+            if d_host and d_port:
+              host, port = d_host, d_port
+        except Exception:
+          pass
       ssh_endpoint = f"{host}:{port}" if host and port and port != "unknown" else "N/A"
 
       print(f"{pod_id:<20} | {name:<25} | {status:<12} | {gpu_display:<22} | {ssh_endpoint}")
@@ -1436,7 +1496,17 @@ def cmd_list(args):
     print("-" * 100)
     for inst in instances:
       gpu_display = f"{inst.gpu_count}x {inst.gpu_name}" if inst.gpu_name else "N/A"
-      ssh_endpoint = f"{inst.ssh_host}:{inst.ssh_port}" if inst.ssh_host and inst.ssh_port else "N/A"
+      ssh_host = inst.ssh_host
+      ssh_port = inst.ssh_port
+      if (not ssh_host or not ssh_port) and inst.status == "RUNNING" and inst.id:
+        try:
+          detailed = provider.get_instance(inst.id)
+          if detailed and detailed.ssh_host and detailed.ssh_port:
+            ssh_host = detailed.ssh_host
+            ssh_port = detailed.ssh_port
+        except Exception:
+          pass
+      ssh_endpoint = f"{ssh_host}:{ssh_port}" if ssh_host and ssh_port else "N/A"
       print(f"{inst.id:<20} | {inst.name:<25} | {inst.status:<12} | {gpu_display:<22} | {ssh_endpoint}")
 
 
@@ -1590,11 +1660,20 @@ def cmd_info(args):
     if datacenter and location and datacenter != location:
       loc_str = f"{datacenter} ({location})"
 
-    gpu_count = pod_info.get("gpuCount", 0)
+    gpu_info = pod_info.get("gpu") if isinstance(pod_info.get("gpu"), dict) else {}
+    gpu_count = pod_info.get("gpuCount")
+    if gpu_count is None and "count" in gpu_info:
+      gpu_count = gpu_info.get("count")
+    if gpu_count is None and machine.get("gpuCount") is not None:
+      gpu_count = machine.get("gpuCount")
+    if gpu_count is None:
+      gpu_count = 1 if (machine.get("gpuDisplayName") or pod_info.get("gpuDisplayName") or pod_info.get("gpuName") or gpu_info.get("id")) else 0
+
     gpu_name = (
         machine.get("gpuDisplayName")
         or pod_info.get("gpuDisplayName")
         or pod_info.get("gpuName")
+        or gpu_info.get("id")
         or machine.get("gpuTypeId")
         or "GPU"
     )

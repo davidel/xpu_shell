@@ -240,6 +240,77 @@ class TestRunPodProvider(BaseProviderTestCase):
     self.assertEqual(host, "5.6.7.8")
     self.assertEqual(port, 2222)
 
+  def test_normalize_runpod_instance_v2_gpu(self):
+    from xpu_shell.providers.runpod_provider import normalize_runpod_instance
+    raw = {
+        "id": "pod-v2-gpu",
+        "name": "gpu-worker",
+        "status": "RUNNING",
+        "cost": 0.74,
+        "disk": 50,
+        "image": "runpod/pytorch:2.1",
+        "gpu": {
+            "id": "NVIDIA RTX 4090",
+            "count": 2,
+            "vcpuCount": 8,
+            "memory": 32
+        },
+        "ssh": {
+            "direct": {
+                "host": "10.20.30.40",
+                "port": 12345
+            }
+        }
+    }
+    inst = normalize_runpod_instance(raw)
+    self.assertEqual(inst.id, "pod-v2-gpu")
+    self.assertEqual(inst.name, "gpu-worker")
+    self.assertEqual(inst.status, "RUNNING")
+    self.assertEqual(inst.gpu_name, "NVIDIA RTX 4090")
+    self.assertEqual(inst.gpu_count, 2)
+    self.assertEqual(inst.cost_per_hr, 0.74)
+    self.assertEqual(inst.disk_gb, 50.0)
+    self.assertEqual(inst.vcpu_count, 8)
+    self.assertEqual(inst.memory_gb, 32.0)
+    self.assertEqual(inst.image_name, "runpod/pytorch:2.1")
+    self.assertEqual(inst.ssh_host, "10.20.30.40")
+    self.assertEqual(inst.ssh_port, 12345)
+
+  def test_normalize_runpod_instance_v2_cpu(self):
+    from xpu_shell.providers.runpod_provider import normalize_runpod_instance
+    raw = {
+        "id": "yctwzt7oq39vnt",
+        "name": "SCDIAG",
+        "status": "RUNNING",
+        "cost": 0.12,
+        "disk": 20,
+        "image": "ubuntu:22.04",
+        "cpu": {
+            "id": "cpu5c",
+            "vcpuCount": 4,
+            "memory": 16
+        },
+        "ssh": {
+            "proxy": {
+                "host": "ssh.runpod.io",
+                "port": 22
+            }
+        }
+    }
+    inst = normalize_runpod_instance(raw)
+    self.assertEqual(inst.id, "yctwzt7oq39vnt")
+    self.assertEqual(inst.name, "SCDIAG")
+    self.assertEqual(inst.status, "RUNNING")
+    self.assertIsNone(inst.gpu_name)
+    self.assertEqual(inst.gpu_count, 0)
+    self.assertEqual(inst.cost_per_hr, 0.12)
+    self.assertEqual(inst.disk_gb, 20.0)
+    self.assertEqual(inst.vcpu_count, 4)
+    self.assertEqual(inst.memory_gb, 16.0)
+    self.assertEqual(inst.image_name, "ubuntu:22.04")
+    self.assertEqual(inst.ssh_host, "ssh.runpod.io")
+    self.assertEqual(inst.ssh_port, 22)
+
 
 class TestVastProvider(BaseProviderTestCase):
 
