@@ -1,5 +1,8 @@
 # XPU Shell (`xpush`)
 
+[![CI](https://github.com/davidel/xpu_shell/actions/workflows/ci.yml/badge.svg)](https://github.com/davidel/xpu_shell/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 A unified command-line interface to provision, execute, and supervise workloads on AI accelerators across multiple cloud providers (**RunPod**, **Vast.ai**, **Spheron**, etc.) with persistent network volumes, customized container environments, and automatic SSH setup.
 
 ## Features
