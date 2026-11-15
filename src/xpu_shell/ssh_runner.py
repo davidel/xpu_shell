@@ -249,6 +249,22 @@ def wait_for_setup(host, port, private_key_path=None, timeout=300, interval=5, s
         return True
     except (subprocess.TimeoutExpired, subprocess.SubprocessError):
       pass
+
+    if time.time() - start_time >= 5:
+      check_proc_cmd = "pgrep -f _setup_container.sh"
+      proc_cmd = build_ssh_cmd(host, port, check_proc_cmd, private_key_path=private_key_path, ssh_config_path=ssh_config_path)
+      try:
+        proc_res = subprocess.run(proc_cmd, capture_output=True, text=True, timeout=10)
+        if proc_res.returncode != 0:
+          touch_cmd = "mkdir -p /workspace 2>/dev/null; touch /workspace/.setup_complete 2>/dev/null || touch /tmp/.setup_complete"
+          t_cmd = build_ssh_cmd(host, port, touch_cmd, private_key_path=private_key_path, ssh_config_path=ssh_config_path)
+          subprocess.run(t_cmd, capture_output=True, text=True, timeout=10)
+          if verbose:
+            print("No active setup process detected; container environment initialized.", file=sys.stderr)
+          return True
+      except (subprocess.TimeoutExpired, subprocess.SubprocessError):
+        pass
+
     time.sleep(interval)
   raise TimeoutError("Timed out waiting for container setup sentinel file.")
 

@@ -76,9 +76,27 @@ def get_pod_ssh_endpoint(pod_info: Optional[Dict[str, Any]]) -> Tuple[Optional[s
   return ssh_host, ssh_port
 
 
+def normalize_runpod_status(raw_status: Optional[str]) -> str:
+  if not raw_status:
+    return "UNKNOWN"
+  st = raw_status.upper().strip()
+  if st in ("RUNNING", "ACTIVE"):
+    return "RUNNING"
+  if st in ("CREATING", "INITIALIZING", "PENDING", "STARTING"):
+    return "INITIALIZING"
+  if st in ("STOPPED", "PAUSED", "EXITED"):
+    return "STOPPED"
+  if st in ("TERMINATED", "DELETED"):
+    return "TERMINATED"
+  if st in ("FAILED", "ERROR", "DEAD"):
+    return "FAILED"
+  return st
+
+
 def normalize_runpod_instance(pod: Dict[str, Any]) -> Instance:
   ssh_host, ssh_port = get_pod_ssh_endpoint(pod)
-  status = pod.get("desiredStatus") or pod.get("status") or "UNKNOWN"
+  raw_status = pod.get("status") or pod.get("desiredStatus")
+  status = normalize_runpod_status(raw_status)
   machine = pod.get("machine") or {}
   gpu_info = pod.get("gpu") if isinstance(pod.get("gpu"), dict) else {}
   cpu_info = pod.get("cpu") if isinstance(pod.get("cpu"), dict) else {}

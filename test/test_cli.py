@@ -376,7 +376,7 @@ class TestRunPodShellCLI(unittest.TestCase):
         detach=False,
         private_key_path=Path("/fake/priv_key"),
         wait_for_setup_flag=False,
-        ssh_timeout=180,
+        ssh_timeout=900,
         ssh_config_path=None
     )
     mock_save_job.assert_not_called()
@@ -431,7 +431,7 @@ class TestRunPodShellCLI(unittest.TestCase):
         detach=True,
         private_key_path=Path("/fake/priv_key"),
         wait_for_setup_flag=False,
-        ssh_timeout=180,
+        ssh_timeout=900,
         ssh_config_path=None
     )
     mock_save_job.assert_called_once_with("job-1")
@@ -484,7 +484,7 @@ class TestRunPodShellCLI(unittest.TestCase):
         detach=False,
         private_key_path=Path("/fake/priv_key"),
         wait_for_setup_flag=False,
-        ssh_timeout=180,
+        ssh_timeout=900,
         ssh_config_path="/dev/null"
     )
 
@@ -2615,6 +2615,156 @@ class TestRunPodShellCLI(unittest.TestCase):
     called_extra_env = mock_exec_cmd.call_args[1].get("extra_env")
     self.assertIsNotNone(called_extra_env)
     self.assertEqual(called_extra_env.get("HF_ENDPOINT"), "http://127.0.0.1:8080/hf")
+
+  def test_normalize_runpod_status(self):
+    from xpu_shell.providers.runpod_provider import normalize_runpod_status
+    self.assertEqual(normalize_runpod_status("RUNNING"), "RUNNING")
+    self.assertEqual(normalize_runpod_status("active"), "RUNNING")
+    self.assertEqual(normalize_runpod_status("CREATING"), "INITIALIZING")
+    self.assertEqual(normalize_runpod_status("initializing"), "INITIALIZING")
+    self.assertEqual(normalize_runpod_status("PENDING"), "INITIALIZING")
+    self.assertEqual(normalize_runpod_status("STOPPED"), "STOPPED")
+    self.assertEqual(normalize_runpod_status("EXITED"), "STOPPED")
+    self.assertEqual(normalize_runpod_status("TERMINATED"), "TERMINATED")
+    self.assertEqual(normalize_runpod_status("FAILED"), "FAILED")
+    self.assertEqual(normalize_runpod_status("DEAD"), "FAILED")
+    self.assertEqual(normalize_runpod_status(None), "UNKNOWN")
+
+  @patch("time.sleep")
+  def test_wait_for_instance_ready_success(self, mock_sleep):
+    from xpu_shell.providers.base import Instance
+    mock_prov = MagicMock()
+    mock_prov.name = "runpod"
+    inst1 = Instance(id="p1", name="p1", provider="runpod", status="INITIALIZING")
+    inst2 = Instance(id="p1", name="p1", provider="runpod", status="RUNNING", ssh_host="1.2.3.4", ssh_port=2222)
+    mock_prov.get_instance.side_effect = [inst1, inst2]
+
+    res = cli.wait_for_instance_ready(mock_prov, "p1", timeout=30)
+    self.assertEqual(res, inst2)
+    self.assertEqual(res.ssh_host, "1.2.3.4")
+    self.assertEqual(res.ssh_port, 2222)
+
+  @patch("time.sleep")
+  def test_wait_for_instance_ready_terminal_failure(self, mock_sleep):
+    from xpu_shell.providers.base import Instance
+    mock_prov = MagicMock()
+    mock_prov.name = "runpod"
+    inst_failed = Instance(id="p1", name="p1", provider="runpod", status="FAILED")
+    mock_prov.get_instance.return_value = inst_failed
+
+    with self.assertRaises(RuntimeError) as ctx:
+      cli.wait_for_instance_ready(mock_prov, "p1", timeout=30)
+    self.assertIn("Pod initialization failed with status: FAILED", str(ctx.exception))
+
+  @patch("time.sleep")
+  @patch("time.time")
+  def test_wait_for_instance_ready_timeout_distinguished_from_failure(self, mock_time, mock_sleep):
+    from xpu_shell.providers.base import Instance
+    mock_prov = MagicMock()
+    mock_prov.name = "vast"
+    mock_time.side_effect = [0, 10, 25]
+    inst_booting = Instance(id="v1", name="v1", provider="vast", status="INITIALIZING")
+    mock_prov.get_instance.return_value = inst_booting
+
+    res = cli.wait_for_instance_ready(mock_prov, "v1", timeout=20)
+    self.assertIsNone(res)
+
+  @patch("subprocess.run")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.wait_for_instance_ready")
+  @patch("xpu_shell.cli.resolve_provider")
+  @patch("xpu_shell.cli.resolve_pod_id")
+  def test_cmd_wait_already_setup(self, mock_res_pod, mock_res_prov, mock_wait_ready, mock_wait_ssh, mock_sub_run):
+    from xpu_shell.providers.base import Instance
+    mock_res_pod.return_value = "pod-999"
+    mock_prov = MagicMock()
+    mock_prov.name = "runpod"
+    mock_res_prov.return_value = mock_prov
+    inst = Instance(id="pod-999", name="pod-999", provider="runpod", status="RUNNING", ssh_host="10.0.0.1", ssh_port=22)
+    mock_wait_ready.return_value = inst
+
+    # First check (test -f .../.setup_complete) returns 0 -> already completed
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_sub_run.return_value = mock_proc
+
+    test_args = ["cli.py", "--api-key", "fake-key", "wait", "-p", "pod-999"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_wait_ready.assert_called_once_with(mock_prov, "pod-999", timeout=900, verbose=False)
+    mock_wait_ssh.assert_called_once()
+    self.assertEqual(mock_sub_run.call_count, 1)
+
+  @patch("subprocess.run")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.wait_for_instance_ready")
+  @patch("xpu_shell.cli.resolve_provider")
+  @patch("xpu_shell.cli.resolve_pod_id")
+  def test_cmd_wait_initializes_sentinel_when_missing(self, mock_res_pod, mock_res_prov, mock_wait_ready, mock_wait_ssh, mock_sub_run):
+    from xpu_shell.providers.base import Instance
+    mock_res_pod.return_value = "pod-999"
+    mock_prov = MagicMock()
+    mock_prov.name = "runpod"
+    mock_res_prov.return_value = mock_prov
+    inst = Instance(id="pod-999", name="pod-999", provider="runpod", status="RUNNING", ssh_host="10.0.0.1", ssh_port=22)
+    mock_wait_ready.return_value = inst
+
+    # First check returns 1 (missing sentinel), second run touches sentinel
+    proc_missing = MagicMock()
+    proc_missing.returncode = 1
+    proc_touch = MagicMock()
+    proc_touch.returncode = 0
+    mock_sub_run.side_effect = [proc_missing, proc_touch]
+
+    test_args = ["cli.py", "--api-key", "fake-key", "wait", "-p", "pod-999"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_wait_ssh.assert_called_once()
+    self.assertEqual(mock_sub_run.call_count, 2)
+
+  @patch("xpu_shell.cli.wait_for_instance_ready", return_value=None)
+  @patch("xpu_shell.cli.resolve_provider")
+  @patch("xpu_shell.cli.resolve_pod_id", return_value="pod-999")
+  def test_cmd_wait_timeout_exits(self, mock_res_pod, mock_res_prov, mock_wait_ready):
+    mock_prov = MagicMock()
+    mock_prov.name = "runpod"
+    mock_res_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "--api-key", "fake-key", "wait", "-p", "pod-999"]
+    with patch.object(sys, "argv", test_args):
+      with self.assertRaises(SystemExit) as ctx:
+        cli.main()
+      self.assertEqual(ctx.exception.code, 1)
+
+  @patch("xpu_shell.cli.clear_pending_setup")
+  @patch("xpu_shell.cli.run_container_setup")
+  @patch("xpu_shell.cli.get_pending_setup", return_value="echo 'custom setup'")
+  @patch("subprocess.run")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.wait_for_instance_ready")
+  @patch("xpu_shell.cli.resolve_provider")
+  @patch("xpu_shell.cli.resolve_pod_id")
+  def test_cmd_wait_executes_pending_setup(self, mock_res_pod, mock_res_prov, mock_wait_ready, mock_wait_ssh, mock_sub_run, mock_get_pending, mock_run_setup, mock_clear_pending):
+    from xpu_shell.providers.base import Instance
+    mock_res_pod.return_value = "pod-999"
+    mock_prov = MagicMock()
+    mock_prov.name = "runpod"
+    mock_res_prov.return_value = mock_prov
+    inst = Instance(id="pod-999", name="pod-999", provider="runpod", status="RUNNING", ssh_host="10.0.0.1", ssh_port=22)
+    mock_wait_ready.return_value = inst
+
+    proc_missing = MagicMock()
+    proc_missing.returncode = 1
+    mock_sub_run.return_value = proc_missing
+
+    test_args = ["cli.py", "--api-key", "fake-key", "wait", "-p", "pod-999"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_run_setup.assert_called_once()
+    mock_clear_pending.assert_called_once_with("pod-999")
 
 
 if __name__ == "__main__":

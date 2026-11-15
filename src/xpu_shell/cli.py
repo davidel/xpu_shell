@@ -162,6 +162,35 @@ def clear_last_job_id_if_match(job_id):
     pass
 
 
+def get_pending_setup_file(pod_id):
+  return get_config_dir() / f".setup_{pod_id}.sh"
+
+
+def save_pending_setup(pod_id, content):
+  try:
+    p_file = get_pending_setup_file(pod_id)
+    p_file.parent.mkdir(parents=True, exist_ok=True)
+    p_file.write_text(content)
+  except Exception:
+    pass
+
+
+def get_pending_setup(pod_id):
+  try:
+    p_file = get_pending_setup_file(pod_id)
+    if p_file.exists():
+      return p_file.read_text()
+  except Exception:
+    pass
+  return None
+
+
+def clear_pending_setup(pod_id):
+  try:
+    p_file = get_pending_setup_file(pod_id)
+    p_file.unlink(missing_ok=True)
+  except Exception:
+    pass
 
 
 def resolve_pod_id(args):
@@ -390,6 +419,7 @@ def build_container_setup_script(apt_packages, requirements_content, pip_package
   if apt_packages_str:
     lines.extend([
         f'log "Updating apt repositories and installing packages: {apt_packages_str}..."',
+        'dpkg --configure -a 2>/dev/null || true',
         f"apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y {apt_packages_str}",
         'log "Apt packages installed successfully."'
     ])
@@ -398,18 +428,25 @@ def build_container_setup_script(apt_packages, requirements_content, pip_package
     lines.extend([
         'log "Configuring system pip for container environment..."',
         'mkdir -p /etc',
-        'cat <<\'EOF\' > /etc/pip.conf',
+        'if [ ! -f /etc/pip.conf ]; then',
+        '  cat <<\'EOF\' > /etc/pip.conf',
         '[global]',
         'break-system-packages = true',
         'EOF',
+        'elif ! grep -q "break-system-packages" /etc/pip.conf 2>/dev/null; then',
+        '  echo -e "\\n[global]\\nbreak-system-packages = true" >> /etc/pip.conf',
+        'fi',
         'export PIP_BREAK_SYSTEM_PACKAGES=1',
-        'if [ -f /etc/environment ] && ! grep -q "PIP_BREAK_SYSTEM_PACKAGES" /etc/environment 2>/dev/null; then',
+        'touch /etc/environment 2>/dev/null || true',
+        'if ! grep -q "PIP_BREAK_SYSTEM_PACKAGES" /etc/environment 2>/dev/null; then',
         '  echo "PIP_BREAK_SYSTEM_PACKAGES=1" >> /etc/environment',
         'fi',
-        'if [ -f /root/.profile ] && ! grep -q "PIP_BREAK_SYSTEM_PACKAGES" /root/.profile 2>/dev/null; then',
+        'touch /root/.profile 2>/dev/null || true',
+        'if ! grep -q "PIP_BREAK_SYSTEM_PACKAGES" /root/.profile 2>/dev/null; then',
         '  echo "export PIP_BREAK_SYSTEM_PACKAGES=1" >> /root/.profile',
         'fi',
-        'if [ -f /root/.bashrc ] && ! grep -q "PIP_BREAK_SYSTEM_PACKAGES" /root/.bashrc 2>/dev/null; then',
+        'touch /root/.bashrc 2>/dev/null || true',
+        'if ! grep -q "PIP_BREAK_SYSTEM_PACKAGES" /root/.bashrc 2>/dev/null; then',
         '  echo "export PIP_BREAK_SYSTEM_PACKAGES=1" >> /root/.bashrc',
         'fi'
     ])
@@ -418,6 +455,7 @@ def build_container_setup_script(apt_packages, requirements_content, pip_package
   if requirements_content.strip():
     lines.extend([
         'log "Writing requirements.txt..."',
+        f'mkdir -p "{volume_mount_path}" 2>/dev/null || true',
         f"echo '{escaped_requirements}' > \"{volume_mount_path}/requirements.txt\"",
         f'log "Installing packages from {volume_mount_path}/requirements.txt..."',
         f'pip install -r "{volume_mount_path}/requirements.txt"'
@@ -605,6 +643,64 @@ def resolve_instance_ssh_endpoint(target_pod_id, args, verbose=False):
   return ssh_host, ssh_port
 
 
+BOOTING_STATUSES = {"CREATING", "INITIALIZING", "PENDING", "STARTING", "DEPLOYING"}
+TERMINAL_FAILURE_STATUSES = {"TERMINATED", "FAILED", "DEAD", "DELETED", "CREATION_FAILED", "BROKEN"}
+
+
+def wait_for_instance_ready(provider, instance_id, timeout=900, verbose=False):
+  start_poll = time.time()
+  last_status = None
+  inst = None
+  while time.time() - start_poll < timeout:
+    try:
+      inst = provider.get_instance(instance_id)
+    except Exception as e:
+      if verbose:
+        print(f"Error querying instance '{instance_id}': {e}", file=sys.stderr)
+      time.sleep(5)
+      continue
+
+    if not inst:
+      time.sleep(5)
+      continue
+
+    status = inst.status or "UNKNOWN"
+    if status in TERMINAL_FAILURE_STATUSES:
+      if provider.name == "runpod":
+        fatal(f"Pod initialization failed with status: {status}")
+      else:
+        fatal(f"Instance initialization failed with status: {status}")
+
+    if status != last_status:
+      last_status = status
+      if provider.name == "runpod":
+        print(f"Pod status: {status}")
+      else:
+        print(f"Instance status: {status}")
+
+    if status == "RUNNING" and inst.ssh_host and inst.ssh_port and inst.ssh_port != "unknown":
+      return inst
+
+    time.sleep(5)
+
+  # Timeout reached
+  current_status = inst.status if inst else (last_status or "UNKNOWN")
+  if current_status in BOOTING_STATUSES or (current_status == "RUNNING" and (not inst.ssh_host or not inst.ssh_port)):
+    unit_name = "Pod" if provider.name == "runpod" else "Instance"
+    print(
+        f"\nTimed out waiting for {unit_name.lower()} '{instance_id}' to become ready after {timeout} seconds.\n"
+        f"The {unit_name.lower()} is still provisioning/booting (current status: {current_status}).\n"
+        f"Run 'xpu-shell wait -p {instance_id}' to continue waiting and finish setup once ready.",
+        file=sys.stderr
+    )
+    return None
+
+  if provider.name == "runpod":
+    fatal(f"Timed out waiting for pod '{instance_id}' to become ready after {timeout} seconds.")
+  else:
+    fatal(f"Timed out waiting for {provider.name.title()} instance '{instance_id}' to become ready after {timeout} seconds.")
+
+
 def cmd_create(args):
 
   # Resolve and validate GPU type
@@ -633,6 +729,13 @@ def cmd_create(args):
       requirements_content=requirements_content,
       pip_packages=args.pip_packages,
       volume_mount_path=args.volume_mount_path
+  )
+
+  has_setup = bool(
+      args.apt_packages or
+      args.apt_packages_file or
+      requirements_content.strip() or
+      args.pip_packages
   )
 
   # Load env file if provided
@@ -682,36 +785,15 @@ def cmd_create(args):
 
     save_last_pod_id(inst.id)
     save_last_provider("vast")
+    if has_setup:
+      save_pending_setup(inst.id, container_disk_setup)
 
     print("Waiting for instance to initialize...")
-    start_poll = time.time()
-    poll_timeout = getattr(args, "ssh_timeout", 180)
-    if poll_timeout < 300:
-      poll_timeout = 300
-    ssh_host = None
-    ssh_port = None
-    last_status = None
-    while time.time() - start_poll < poll_timeout:
-      try:
-        inst = provider.get_instance(inst.id)
-      except Exception:
-        time.sleep(5)
-        continue
-
-      if inst.status in ("TERMINATED", "FAILED", "DEAD"):
-        fatal(f"Instance initialization failed with status: {inst.status}")
-
-      if inst.status != last_status:
-        last_status = inst.status
-        print(f"Instance status: {inst.status}")
-
-      if inst.status == "RUNNING" and inst.ssh_host and inst.ssh_port:
-        ssh_host = inst.ssh_host
-        ssh_port = inst.ssh_port
-        break
-      time.sleep(5)
-    else:
-      fatal(f"Timed out waiting for Vast.ai instance '{inst.id}' to become ready after {poll_timeout} seconds.")
+    poll_timeout = getattr(args, "ssh_timeout", 900)
+    inst = wait_for_instance_ready(provider, inst.id, timeout=poll_timeout, verbose=getattr(args, "verbose", False))
+    if not inst:
+      return
+    ssh_host, ssh_port = inst.ssh_host, inst.ssh_port
   elif provider.name == "spheron":
     print(f"Launching Spheron instance '{args.name}'...")
     try:
@@ -733,36 +815,15 @@ def cmd_create(args):
 
     save_last_pod_id(inst.id)
     save_last_provider("spheron")
+    if has_setup:
+      save_pending_setup(inst.id, container_disk_setup)
 
     print("Waiting for instance to initialize...")
-    start_poll = time.time()
-    poll_timeout = getattr(args, "ssh_timeout", 180)
-    if poll_timeout < 300:
-      poll_timeout = 300
-    ssh_host = None
-    ssh_port = None
-    last_status = None
-    while time.time() - start_poll < poll_timeout:
-      try:
-        inst = provider.get_instance(inst.id)
-      except Exception:
-        time.sleep(5)
-        continue
-
-      if inst.status in ("TERMINATED", "FAILED", "DEAD"):
-        fatal(f"Instance initialization failed with status: {inst.status}")
-
-      if inst.status != last_status:
-        last_status = inst.status
-        print(f"Instance status: {inst.status}")
-
-      if inst.status == "RUNNING" and inst.ssh_host and inst.ssh_port:
-        ssh_host = inst.ssh_host
-        ssh_port = inst.ssh_port
-        break
-      time.sleep(5)
-    else:
-      fatal(f"Timed out waiting for Spheron instance '{inst.id}' to become ready after {poll_timeout} seconds.")
+    poll_timeout = getattr(args, "ssh_timeout", 900)
+    inst = wait_for_instance_ready(provider, inst.id, timeout=poll_timeout, verbose=getattr(args, "verbose", False))
+    if not inst:
+      return
+    ssh_host, ssh_port = inst.ssh_host, inst.ssh_port
   elif provider.name == "cloudrift":
     print(f"Launching CloudRift instance '{args.name}'...")
     try:
@@ -783,36 +844,15 @@ def cmd_create(args):
 
     save_last_pod_id(inst.id)
     save_last_provider("cloudrift")
+    if has_setup:
+      save_pending_setup(inst.id, container_disk_setup)
 
     print("Waiting for instance to initialize...")
-    start_poll = time.time()
-    poll_timeout = getattr(args, "ssh_timeout", 180)
-    if poll_timeout < 300:
-      poll_timeout = 300
-    ssh_host = None
-    ssh_port = None
-    last_status = None
-    while time.time() - start_poll < poll_timeout:
-      try:
-        inst = provider.get_instance(inst.id)
-      except Exception:
-        time.sleep(5)
-        continue
-
-      if inst.status in ("TERMINATED", "FAILED", "DEAD"):
-        fatal(f"Instance initialization failed with status: {inst.status}")
-
-      if inst.status != last_status:
-        last_status = inst.status
-        print(f"Instance status: {inst.status}")
-
-      if inst.status == "RUNNING" and inst.ssh_host and inst.ssh_port:
-        ssh_host = inst.ssh_host
-        ssh_port = inst.ssh_port
-        break
-      time.sleep(5)
-    else:
-      fatal(f"Timed out waiting for CloudRift instance '{inst.id}' to become ready after {poll_timeout} seconds.")
+    poll_timeout = getattr(args, "ssh_timeout", 900)
+    inst = wait_for_instance_ready(provider, inst.id, timeout=poll_timeout, verbose=getattr(args, "verbose", False))
+    if not inst:
+      return
+    ssh_host, ssh_port = inst.ssh_host, inst.ssh_port
   elif provider.name == "lium":
     print(f"Launching Lium instance '{args.name}'...")
     try:
@@ -833,36 +873,15 @@ def cmd_create(args):
 
     save_last_pod_id(inst.id)
     save_last_provider("lium")
+    if has_setup:
+      save_pending_setup(inst.id, container_disk_setup)
 
     print("Waiting for instance to initialize...")
-    start_poll = time.time()
-    poll_timeout = getattr(args, "ssh_timeout", 180)
-    if poll_timeout < 300:
-      poll_timeout = 300
-    ssh_host = None
-    ssh_port = None
-    last_status = None
-    while time.time() - start_poll < poll_timeout:
-      try:
-        inst = provider.get_instance(inst.id)
-      except Exception:
-        time.sleep(5)
-        continue
-
-      if inst.status in ("TERMINATED", "FAILED", "DEAD"):
-        fatal(f"Instance initialization failed with status: {inst.status}")
-
-      if inst.status != last_status:
-        last_status = inst.status
-        print(f"Instance status: {inst.status}")
-
-      if inst.status == "RUNNING" and inst.ssh_host and inst.ssh_port:
-        ssh_host = inst.ssh_host
-        ssh_port = inst.ssh_port
-        break
-      time.sleep(5)
-    else:
-      fatal(f"Timed out waiting for Lium instance '{inst.id}' to become ready after {poll_timeout} seconds.")
+    poll_timeout = getattr(args, "ssh_timeout", 900)
+    inst = wait_for_instance_ready(provider, inst.id, timeout=poll_timeout, verbose=getattr(args, "verbose", False))
+    if not inst:
+      return
+    ssh_host, ssh_port = inst.ssh_host, inst.ssh_port
   else:
     # Launch Pod on RunPod
     print(f"Launching RunPod instance '{args.name}'...")
@@ -904,48 +923,16 @@ def cmd_create(args):
 
     save_last_pod_id(pod["id"])
     save_last_provider("runpod")
-
+    if has_setup:
+      save_pending_setup(pod["id"], container_disk_setup)
 
     # Wait for the pod to boot up
     print("Waiting for pod to initialize...")
-    start_poll = time.time()
-    poll_timeout = getattr(args, "ssh_timeout", 180)
-    if poll_timeout < 300:
-      poll_timeout = 300
-    pod_info = None
-    last_status = None
-
-    while time.time() - start_poll < poll_timeout:
-      try:
-        pod_info = runpod.get_pod(pod["id"])
-      except Exception as e:
-        print(f"Error polling pod status: {e}")
-        time.sleep(5)
-        continue
-
-      if not pod_info:
-        time.sleep(5)
-        continue
-
-      status = pod_info.get("desiredStatus") or pod_info.get("status")
-      if status in ("EXITED", "TERMINATED", "FAILED", "DEAD"):
-        fatal(f"Pod initialization failed with status: {status}")
-
-      if status != last_status:
-        last_status = status
-        print(f"Pod status: {status}")
-
-      ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
-      if status == "RUNNING" and ssh_host and ssh_port and ssh_port != "unknown":
-        break
-
-      time.sleep(5)
-    else:
-      fatal(f"Timed out waiting for pod '{pod['id']}' to become ready after {poll_timeout} seconds.")
-
-    ssh_host, ssh_port = get_pod_ssh_endpoint(pod_info)
-    if not ssh_host or not ssh_port or ssh_port == "unknown":
-      fatal(f"Could not resolve SSH endpoint for pod '{pod['id']}'.")
+    poll_timeout = getattr(args, "ssh_timeout", 900)
+    inst = wait_for_instance_ready(provider, pod["id"], timeout=poll_timeout, verbose=getattr(args, "verbose", False))
+    if not inst:
+      return
+    ssh_host, ssh_port = inst.ssh_host, inst.ssh_port
 
 
   ssh_config = getattr(args, "ssh_config", None)
@@ -977,9 +964,13 @@ def cmd_create(args):
         setup_script_content=container_disk_setup,
         private_key_path=priv_key,
         detach=detach_setup,
-        ssh_timeout=getattr(args, "ssh_timeout", 180),
+        ssh_timeout=getattr(args, "ssh_timeout", 900),
         ssh_config_path=ssh_config
     )
+    if "inst" in locals() and inst:
+      clear_pending_setup(inst.id)
+    elif "pod" in locals():
+      clear_pending_setup(pod.get("id"))
   else:
     sentinel_cmd = f"mkdir -p {args.volume_mount_path} 2>/dev/null; touch {args.volume_mount_path}/.setup_complete 2>/dev/null || touch /tmp/.setup_complete"
     cmd = build_ssh_cmd(
@@ -1034,6 +1025,79 @@ def cmd_create(args):
 
   print(f"\nPod is ready! Connect via SSH:")
   print(f"ssh {ssh_config_flag}-p {ssh_port} root@{ssh_host}")
+
+
+def cmd_wait(args):
+  target_pod_id = resolve_pod_id(args)
+  provider = resolve_provider(args=args, instance_id=target_pod_id)
+  timeout = getattr(args, "ssh_timeout", 900)
+  verbose = getattr(args, "verbose", False)
+  volume_mount_path = getattr(args, "volume_mount_path", "/workspace")
+
+  unit_name = "pod" if provider.name == "runpod" else "instance"
+  print(f"Waiting for {unit_name} '{target_pod_id}' ({provider.name}) to initialize...")
+  inst = wait_for_instance_ready(provider, target_pod_id, timeout=timeout, verbose=verbose)
+  if not inst:
+    sys.exit(1)
+
+  ssh_host = inst.ssh_host
+  ssh_port = inst.ssh_port
+  priv_key = find_ssh_private_key(getattr(args, "ssh_key_path", None), getattr(args, "ssh_private_key_path", None))
+  ssh_config = getattr(args, "ssh_config", None)
+
+  wait_for_ssh(
+      host=ssh_host,
+      port=ssh_port,
+      private_key_path=priv_key,
+      timeout=timeout,
+      ssh_config_path=ssh_config,
+      verbose=verbose
+  )
+
+  # Check if setup has already been done
+  check_cmd = f"test -f {volume_mount_path}/.setup_complete || test -f /tmp/.setup_complete"
+  ssh_check = build_ssh_cmd(
+      ssh_host,
+      ssh_port,
+      check_cmd,
+      private_key_path=priv_key,
+      ssh_config_path=ssh_config
+  )
+  check_res = subprocess.run(ssh_check, capture_output=True, text=True)
+  if check_res.returncode == 0:
+    clear_pending_setup(target_pod_id)
+    print(f"Environment setup already completed on {unit_name} '{target_pod_id}'.")
+  else:
+    pending_setup = get_pending_setup(target_pod_id)
+    if pending_setup:
+      print(f"Executing pending environment setup on {unit_name} '{target_pod_id}'...")
+      res = run_container_setup(
+          host=ssh_host,
+          port=ssh_port,
+          setup_script_content=pending_setup,
+          private_key_path=priv_key,
+          detach=False,
+          ssh_timeout=timeout,
+          ssh_config_path=ssh_config
+      )
+      clear_pending_setup(target_pod_id)
+    else:
+      sentinel_cmd = f"mkdir -p {volume_mount_path} 2>/dev/null; touch {volume_mount_path}/.setup_complete 2>/dev/null || touch /tmp/.setup_complete"
+      cmd = build_ssh_cmd(
+          ssh_host,
+          ssh_port,
+          sentinel_cmd,
+          private_key_path=priv_key,
+          ssh_config_path=ssh_config
+      )
+      subprocess.run(cmd, capture_output=True, text=True)
+      print(f"Container environment setup initialized on {unit_name} '{target_pod_id}'.")
+
+  resolved_cfg = resolve_ssh_config(ssh_config)
+  ssh_config_flag = f"-F {resolved_cfg} " if resolved_cfg else ""
+  key_flag = f"-i {priv_key} " if priv_key else ""
+  print(f"\n{unit_name.capitalize()} is ready! Connect via SSH:")
+  print(f"ssh {ssh_config_flag}{key_flag}-p {ssh_port} root@{ssh_host}")
 
 
 def cmd_exec(args):
@@ -2417,7 +2481,7 @@ def main(args=None):
       "--ssh-timeout",
       dest="ssh_timeout",
       type=int,
-      default=180,
+      default=900,
       help="Max seconds to wait for SSH and setup readiness (default: %(default)s)"
   )
   create_parser.add_argument(
@@ -2457,6 +2521,52 @@ def main(args=None):
         provider.register_commands(subparsers)
       except Exception:
         pass
+
+  # Wait Command
+  wait_parser = subparsers.add_parser(
+      "wait",
+      parents=[subparser_parent],
+      help="Wait for an active or booting XPU instance to become ready and ensure environment setup is completed"
+  )
+  wait_parser.add_argument(
+      "-p",
+      "--pod",
+      dest="pod",
+      default=None,
+      help="The ID of the target pod/instance (defaults to last created pod)"
+  )
+  wait_parser.add_argument(
+      "--ssh-timeout",
+      dest="ssh_timeout",
+      type=int,
+      default=900,
+      help="Max seconds to wait for instance and SSH readiness (default: %(default)s)"
+  )
+  wait_parser.add_argument(
+      "--ssh-private-key-path",
+      dest="ssh_private_key_path",
+      help="Path to private SSH key (auto-detected if omitted)"
+  )
+  wait_parser.add_argument(
+      "--ssh-config",
+      dest="ssh_config",
+      default=os.environ.get("RUNPOD_SSH_CONFIG"),
+      help="Path to custom SSH config file (e.g. /dev/null), or RUNPOD_SSH_CONFIG env var"
+  )
+  wait_parser.add_argument(
+      "--volume-mount-path",
+      dest="volume_mount_path",
+      default="/workspace",
+      help="Mount path of the persistent volume (default: %(default)s)"
+  )
+  wait_parser.add_argument(
+      "-v",
+      "--verbose",
+      dest="verbose",
+      action="store_true",
+      default=False,
+      help="Show detailed connection and setup progress"
+  )
 
   # Exec Command
   exec_parser = subparsers.add_parser("exec", parents=[subparser_parent], help="Execute a local script on an active XPU instance via SSH")
@@ -3143,6 +3253,8 @@ def main(args=None):
 
   if args.command == "create":
     cmd_create(args)
+  elif args.command == "wait":
+    cmd_wait(args)
   elif args.command == "run":
     cmd_run(args)
   elif args.command in ("cp", "rsync"):
