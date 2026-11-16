@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import sys
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -1836,5 +1837,254 @@ class TestCloudRiftProvider(BaseProviderTestCase):
     self.assertIn("RUNNING", output)
     self.assertIn("1x NVIDIA H100 80GB HBM3", output)
     self.assertIn("192.0.2.55:22022", output)
+
+
+class TestDurationAndExpiration(BaseProviderTestCase):
+
+  def test_parse_duration_hours(self):
+    self.assertEqual(cli.parse_duration_hours("24h"), 24.0)
+    self.assertEqual(cli.parse_duration_hours("24 hours"), 24.0)
+    self.assertEqual(cli.parse_duration_hours("7d"), 168.0)
+    self.assertEqual(cli.parse_duration_hours("2 days"), 48.0)
+    self.assertEqual(cli.parse_duration_hours("1w"), 168.0)
+    self.assertEqual(cli.parse_duration_hours("2 weeks"), 336.0)
+    self.assertAlmostEqual(cli.parse_duration_hours("30m"), 0.5)
+    self.assertEqual(cli.parse_duration_hours(48), 48.0)
+    self.assertEqual(cli.parse_duration_hours(12.5), 12.5)
+
+    with self.assertRaises(ValueError):
+      cli.parse_duration_hours(None)
+    with self.assertRaises(ValueError):
+      cli.parse_duration_hours(0)
+    with self.assertRaises(ValueError):
+      cli.parse_duration_hours(-5)
+    with self.assertRaises(ValueError):
+      cli.parse_duration_hours("invalid")
+
+  def test_format_duration_hours(self):
+    self.assertEqual(cli.format_duration_hours(None), "N/A")
+    self.assertEqual(cli.format_duration_hours(0), "Expired")
+    self.assertEqual(cli.format_duration_hours(-1), "Expired")
+    self.assertEqual(cli.format_duration_hours(24.0), "24h")
+    self.assertEqual(cli.format_duration_hours(4.5), "4.5h")
+
+  def test_format_expiration(self):
+    now = time.time()
+    future_ts = now + 48 * 3600
+    res = cli.format_expiration(future_ts, now_ts=now)
+    self.assertIsNotNone(res)
+    self.assertIn("UTC", res)
+    self.assertIn("48 hours remaining", res)
+
+    past_ts = now - 3600
+    res_past = cli.format_expiration(past_ts, now_ts=now)
+    self.assertIsNotNone(res_past)
+    self.assertIn("(expired)", res_past)
+
+    # Distant future (> 5 years)
+    distant_ts = now + 10 * 365 * 86400
+    self.assertIsNone(cli.format_expiration(distant_ts, now_ts=now))
+
+    # None or empty
+    self.assertIsNone(cli.format_expiration(None))
+
+  @patch("requests.Session.request")
+  def test_vast_search_offers_with_min_duration(self, mock_req):
+    now = time.time()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "offers": [
+            {
+                "id": 1,
+                "gpu_name": "RTX 4090",
+                "num_gpus": 1,
+                "rented": False,
+                "reliability2": 0.98,
+                "dph_total": 0.20,
+                "disk_space": 100.0,
+                "end_date": now + 2 * 3600  # 2 hours left
+            },
+            {
+                "id": 2,
+                "gpu_name": "RTX 4090",
+                "num_gpus": 1,
+                "rented": False,
+                "reliability2": 0.98,
+                "dph_total": 0.30,
+                "disk_space": 100.0,
+                "end_date": now + 48 * 3600  # 48 hours left
+            },
+            {
+                "id": 3,
+                "gpu_name": "RTX 4090",
+                "num_gpus": 1,
+                "rented": False,
+                "reliability2": 0.98,
+                "dph_total": 0.40,
+                "disk_space": 100.0
+                # no expiration (unlimited)
+            }
+        ]
+    }
+    mock_req.return_value = mock_resp
+
+    vast = VastProvider(api_key="fake-key")
+    # Require at least 24 hours
+    offers = vast.search_offers(gpu_name="4090", min_duration_hours=24.0)
+    offer_ids = [o["id"] for o in offers]
+    self.assertNotIn(1, offer_ids)
+    self.assertIn(2, offer_ids)
+    self.assertIn(3, offer_ids)
+
+  @patch("requests.Session.request")
+  def test_vast_list_gpus_aggregated_duration(self, mock_req):
+    now = time.time()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "offers": [
+            {
+                "id": 1,
+                "gpu_name": "RTX 4090",
+                "num_gpus": 1,
+                "rented": False,
+                "reliability2": 0.98,
+                "dph_total": 0.25,
+                "gpu_ram": 24576,
+                "disk_space": 100.0,
+                "end_date": now + 72 * 3600
+            }
+        ]
+    }
+    mock_req.return_value = mock_resp
+
+    vast = VastProvider(api_key="fake-key")
+    gpus = vast.list_gpus(expand=False)
+    self.assertEqual(len(gpus), 1)
+    self.assertIn("maxDurationHours", gpus[0])
+    self.assertAlmostEqual(gpus[0]["maxDurationHours"], 72.0, delta=0.5)
+
+  @patch("xpu_shell.cli.resolve_provider")
+  @patch("builtins.print")
+  def test_vast_cli_info_shows_expiration(self, mock_print, mock_resolve_prov):
+    now = time.time()
+    mock_prov = MagicMock()
+    mock_prov.name = "vast"
+    mock_prov.get_instance.return_value = Instance(
+        id="58842137",
+        name="vast-58842137",
+        provider="vast",
+        status="RUNNING",
+        ssh_host="ssh2.vast.ai",
+        ssh_port=22516,
+        gpu_name="RTX 4090",
+        gpu_count=1,
+        cost_per_hr=0.34,
+        uptime_seconds=3600,
+        raw={
+            "id": 58842137,
+            "status": "running",
+            "ssh_host": "ssh2.vast.ai",
+            "ssh_port": 22516,
+            "gpu_name": "RTX 4090",
+            "start_date": now - 3600,
+            "end_date": now + 48 * 3600,
+            "geolocation": "US"
+        }
+    )
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "info", "--provider", "vast", "--api-key", "fake-key", "-p", "58842137"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("Expiration:", output)
+    self.assertIn("UTC", output)
+    self.assertIn("hours remaining", output)
+
+  @patch("xpu_shell.cli.resolve_provider")
+  @patch("builtins.print")
+  def test_vast_cli_gpus_shows_max_duration_without_expand(self, mock_print, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "vast"
+    mock_prov.list_gpus.return_value = [
+        {
+            "id": "RTX 4090",
+            "displayName": "RTX 4090",
+            "memoryInGb": 24,
+            "minPrice": 0.29,
+            "maxPrice": 0.45,
+            "count": 5,
+            "maxDurationHours": 72.0
+        }
+    ]
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "gpus", "--provider", "vast", "--api-key", "fake-key"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("MAX DURATION", output)
+    self.assertIn("72h", output)
+
+  @patch("xpu_shell.cli.resolve_provider")
+  @patch("builtins.print")
+  def test_vast_cli_gpus_shows_max_duration_with_expand(self, mock_print, mock_resolve_prov):
+    mock_prov = MagicMock()
+    mock_prov.name = "vast"
+    mock_prov.list_gpus.return_value = [
+        {
+            "id": 9992,
+            "gpu_name": "RTX 4090",
+            "num_gpus": 1,
+            "gpu_ram": 24576,
+            "dph_total": 0.345,
+            "reliability2": 0.992,
+            "duration_hours": 168.0,
+            "inet_down": 1200.0,
+            "inet_up": 800.0,
+            "disk_space": 150.0,
+            "geolocation": "US"
+        }
+    ]
+    mock_resolve_prov.return_value = mock_prov
+
+    test_args = ["cli.py", "gpus", "--provider", "vast", "--api-key", "fake-key", "-l", "4090"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    self.assertIn("MAX DURATION", output)
+    self.assertIn("168h", output)
+
+  @patch("xpu_shell.providers.vast_provider.VastProvider.create_instance")
+  @patch("xpu_shell.providers.vast_provider.VastProvider.get_instance")
+  @patch("xpu_shell.cli.wait_for_instance_ready")
+  @patch("xpu_shell.cli.wait_for_ssh")
+  @patch("xpu_shell.cli.find_ssh_private_key")
+  @patch("xpu_shell.cli.get_ssh_key")
+  def test_create_with_min_duration_passes_to_vast_provider(self, mock_ssh_key, mock_find_priv, mock_wait_ssh, mock_wait_inst, mock_get_inst, mock_create_inst):
+    mock_ssh_key.return_value = "ssh-rsa fake_public_key"
+    fake_inst = Instance(
+        id="12345",
+        name="test-worker",
+        provider="vast",
+        status="RUNNING",
+        ssh_host="ssh.vast.ai",
+        ssh_port=2222
+    )
+    mock_create_inst.return_value = fake_inst
+    mock_get_inst.return_value = fake_inst
+    mock_wait_inst.return_value = fake_inst
+
+    test_args = ["cli.py", "create", "--provider", "vast", "--api-key", "fake-key", "--min-duration", "48h"]
+    with patch.object(sys, "argv", test_args):
+      cli.main()
+
+    mock_create_inst.assert_called_once()
+    self.assertEqual(mock_create_inst.call_args[1]["min_duration"], "48h")
 
 

@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import re
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 @dataclass
@@ -98,6 +100,117 @@ def parse_ssh_command(cmd: Optional[str]) -> Tuple[Optional[str], Optional[int]]
   return host, port
 
 
+def parse_duration_hours(val: Any) -> float:
+  """Parse a duration string or number into hours as a float.
+
+  Supported suffixes: 'h' (hours), 'd' (days), 'w' (weeks), 'm' (minutes).
+  Unadorned numbers are treated as hours.
+  Examples: '24h' -> 24.0, '7d' -> 168.0, '2w' -> 336.0, 48 -> 48.0
+  """
+  if val is None:
+    raise ValueError("Duration cannot be None.")
+
+  if isinstance(val, (int, float)):
+    hours = float(val)
+    if hours <= 0:
+      raise ValueError(f"Duration must be greater than 0, got {val}.")
+    return hours
+
+  s = str(val).strip().lower()
+  if not s:
+    raise ValueError("Duration cannot be empty.")
+
+  multiplier = 1.0
+  num_part = s
+
+  if s.endswith("weeks") or s.endswith("week") or s.endswith("w"):
+    multiplier = 24.0 * 7.0
+    num_part = re.sub(r"(weeks?|w)$", "", s).strip()
+  elif s.endswith("days") or s.endswith("day") or s.endswith("d"):
+    multiplier = 24.0
+    num_part = re.sub(r"(days?|d)$", "", s).strip()
+  elif s.endswith("hours") or s.endswith("hour") or s.endswith("h"):
+    multiplier = 1.0
+    num_part = re.sub(r"(hours?|h)$", "", s).strip()
+  elif s.endswith("minutes") or s.endswith("minute") or s.endswith("m"):
+    multiplier = 1.0 / 60.0
+    num_part = re.sub(r"(minutes?|m)$", "", s).strip()
+
+  try:
+    val_num = float(num_part)
+  except ValueError:
+    raise ValueError(f"Invalid duration format: '{val}'. Expected format like '24h', '7d', '2w'.")
+
+  if val_num <= 0:
+    raise ValueError(f"Duration must be greater than 0, got '{val}'.")
+
+  return val_num * multiplier
+
+
+def format_duration_hours(hours: Optional[float]) -> str:
+  """Format duration in hours for display in table columns."""
+  if hours is None:
+    return "N/A"
+  if hours <= 0:
+    return "Expired"
+  if hours >= 10:
+    return f"{int(round(hours))}h"
+  return f"{hours:.1f}h"
+
+
+def format_expiration(raw_end_date: Any, now_ts: Optional[float] = None) -> Optional[str]:
+  """Format expiration timestamp into a readable date and remaining hours.
+
+  Returns None if raw_end_date is None or represents a distant future (> 5 years).
+  """
+  if not raw_end_date:
+    return None
+
+  end_ts = None
+  if isinstance(raw_end_date, (int, float)):
+    end_ts = float(raw_end_date)
+  elif isinstance(raw_end_date, str):
+    s = raw_end_date.strip()
+    try:
+      end_ts = float(s)
+    except ValueError:
+      try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        end_ts = dt.timestamp()
+      except Exception:
+        return None
+  else:
+    return None
+
+  if end_ts < 1e8:
+    return None
+
+  if now_ts is None:
+    now_ts = time.time()
+
+  rem_hours = (end_ts - now_ts) / 3600.0
+  if rem_hours > 43800:
+    return None
+
+  try:
+    dt = datetime.fromtimestamp(end_ts, timezone.utc)
+    date_str = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+  except Exception:
+    return None
+
+  if rem_hours > 0:
+    if rem_hours >= 10:
+      rem_str = f"{int(round(rem_hours))} hours remaining"
+    elif rem_hours >= 1:
+      rem_str = f"{rem_hours:.1f} hours remaining"
+    else:
+      rem_mins = max(1, int(round(rem_hours * 60)))
+      rem_str = f"{rem_mins} minutes remaining"
+    return f"{date_str} ({rem_str})"
+  else:
+    return f"{date_str} (expired)"
+
+
 class BaseProvider(ABC):
 
   @property
@@ -147,7 +260,7 @@ class BaseProvider(ABC):
     pass
 
   @abstractmethod
-  def list_gpus(self, filter_pattern: Optional[str] = None, expand: bool = False) -> List[Dict[str, Any]]:
+  def list_gpus(self, filter_pattern: Optional[str] = None, expand: bool = False, **kwargs) -> List[Dict[str, Any]]:
     pass
 
   def list_templates(self, filter_pattern: Optional[str] = None) -> List[Template]:

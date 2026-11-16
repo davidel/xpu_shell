@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 import requests
 
@@ -10,7 +11,10 @@ from xpu_shell.providers.base import (
     Instance,
     Template,
     format_template_identifier,
-    parse_template_identifier
+    parse_template_identifier,
+    parse_duration_hours,
+    format_duration_hours,
+    format_expiration
 )
 
 
@@ -51,6 +55,38 @@ def normalize_vast_status(raw_status: Optional[str]) -> str:
   if st in ("deleted", "destroying", "terminated"):
     return "TERMINATED"
   return raw_status.upper()
+
+
+def extract_vast_duration_hours(data: Dict[str, Any], now_ts: Optional[float] = None) -> Optional[float]:
+  end_date = data.get("end_date")
+  if end_date is not None:
+    try:
+      end_ts = float(end_date)
+      if end_ts > 1e8:
+        if now_ts is None:
+          now_ts = time.time()
+        rem_hours = (end_ts - now_ts) / 3600.0
+        if rem_hours > 43800:
+          return None
+        return max(0.0, rem_hours)
+    except (ValueError, TypeError):
+      pass
+
+  duration = data.get("duration")
+  if duration is not None:
+    try:
+      dur_val = float(duration)
+      if dur_val > 500:
+        dur_hours = dur_val / 3600.0
+      else:
+        dur_hours = dur_val * 24.0
+      if dur_hours > 43800:
+        return None
+      return max(0.0, dur_hours)
+    except (ValueError, TypeError):
+      pass
+
+  return None
 
 
 def normalize_vast_instance(data: Dict[str, Any]) -> Instance:
@@ -209,7 +245,8 @@ class VastProvider(BaseProvider):
       min_gpus: int = 1,
       min_disk_gb: Optional[float] = None,
       min_reliability: float = 0.90,
-      verified_only: bool = False
+      verified_only: bool = False,
+      min_duration_hours: Optional[float] = None
   ) -> List[Dict[str, Any]]:
     query: Dict[str, Any] = {
         "rentable": {"eq": True},
@@ -221,6 +258,7 @@ class VastProvider(BaseProvider):
     if not isinstance(offers, list):
       offers = []
 
+    now = time.time()
     filtered = []
     for o in offers:
       if o.get("rented"):
@@ -238,6 +276,10 @@ class VastProvider(BaseProvider):
         pattern = gpu_name.replace(" ", "").lower()
         if pattern not in off_gpu.replace(" ", "").lower():
           continue
+      if min_duration_hours is not None:
+        dur = extract_vast_duration_hours(o, now_ts=now)
+        if dur is not None and dur < min_duration_hours:
+          continue
       filtered.append(o)
 
     filtered.sort(key=lambda x: x.get("dph_total", float("inf")))
@@ -254,6 +296,7 @@ class VastProvider(BaseProvider):
       offer_id: Optional[int] = None,
       gpu_count: int = 1,
       min_reliability: float = 0.90,
+      min_duration: Optional[Any] = None,
       **kwargs
   ) -> Instance:
     if template:
@@ -263,17 +306,21 @@ class VastProvider(BaseProvider):
       elif kind == "template":
         template_id = val
 
+    min_dur_hours = parse_duration_hours(min_duration) if min_duration is not None else None
+
     target_offer_id = offer_id
     if target_offer_id is None:
       offers = self.search_offers(
           gpu_name=gpu_name,
           min_gpus=gpu_count,
           min_disk_gb=disk_gb,
-          min_reliability=min_reliability
+          min_reliability=min_reliability,
+          min_duration_hours=min_dur_hours
       )
       if not offers:
+        dur_msg = f", min duration {min_duration}" if min_duration is not None else ""
         raise RuntimeError(
-            f"No matching Vast.ai offers found for GPU: '{gpu_name or 'any'}' (min {gpu_count} GPUs, {disk_gb} GB disk)."
+            f"No matching Vast.ai offers found for GPU: '{gpu_name or 'any'}' (min {gpu_count} GPUs, {disk_gb} GB disk{dur_msg})."
         )
       target_offer_id = offers[0]["id"]
 
@@ -311,8 +358,18 @@ class VastProvider(BaseProvider):
   def terminate_instance(self, instance_id: str) -> None:
     self._request("DELETE", f"/instances/{instance_id}/")
 
-  def list_gpus(self, filter_pattern: Optional[str] = None, expand: bool = False) -> List[Dict[str, Any]]:
-    offers = self.search_offers(min_reliability=0.5)
+  def list_gpus(
+      self,
+      filter_pattern: Optional[str] = None,
+      expand: bool = False,
+      min_duration_hours: Optional[float] = None,
+      **kwargs
+  ) -> List[Dict[str, Any]]:
+    offers = self.search_offers(
+        min_reliability=0.5,
+        min_duration_hours=min_duration_hours
+    )
+    now = time.time()
     if expand:
       if filter_pattern:
         regex = re.compile(filter_pattern, re.IGNORECASE)
@@ -320,6 +377,9 @@ class VastProvider(BaseProvider):
             o for o in offers
             if regex.search(str(o.get("gpu_name") or "")) or regex.search(str(o.get("id") or ""))
         ]
+      for o in offers:
+        if "duration_hours" not in o:
+          o["duration_hours"] = extract_vast_duration_hours(o, now_ts=now)
       return offers
 
     gpu_aggregates: Dict[str, Dict[str, Any]] = {}
@@ -328,6 +388,7 @@ class VastProvider(BaseProvider):
       gname = o.get("gpu_name") or "Unknown"
       dph = o.get("dph_total") or 0.0
       vram = o.get("gpu_ram") or 0
+      dur_h = extract_vast_duration_hours(o, now_ts=now)
 
       if gname not in gpu_aggregates:
         gpu_aggregates[gname] = {
@@ -336,13 +397,17 @@ class VastProvider(BaseProvider):
             "memoryInGb": vram // 1024 if vram > 128 else vram,
             "minPrice": dph,
             "maxPrice": dph,
-            "count": 1
+            "count": 1,
+            "maxDurationHours": dur_h
         }
       else:
         agg = gpu_aggregates[gname]
         agg["minPrice"] = min(agg["minPrice"], dph)
         agg["maxPrice"] = max(agg["maxPrice"], dph)
         agg["count"] += 1
+        if dur_h is not None:
+          if agg.get("maxDurationHours") is None or dur_h > agg["maxDurationHours"]:
+            agg["maxDurationHours"] = dur_h
 
     result = list(gpu_aggregates.values())
     if filter_pattern:

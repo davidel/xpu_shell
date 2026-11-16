@@ -8,7 +8,10 @@ from xpu_shell.providers.base import (
     Template,
     parse_template_identifier,
     format_template_identifier,
-    parse_ssh_command
+    parse_ssh_command,
+    parse_duration_hours,
+    format_duration_hours,
+    format_expiration
 )
 from xpu_shell.providers.runpod_provider import RunPodProvider
 from xpu_shell.providers.vast_provider import VastProvider

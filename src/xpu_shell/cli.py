@@ -34,7 +34,10 @@ from xpu_shell.providers import (
     parse_instance_identifier,
     parse_template_identifier,
     format_template_identifier,
-    parse_ssh_command
+    parse_ssh_command,
+    parse_duration_hours,
+    format_duration_hours,
+    format_expiration
 )
 from xpu_shell.proxy_manager import (
     start_proxy_for_pod,
@@ -778,7 +781,8 @@ def cmd_create(args):
           disk_gb=disk_total,
           env=container_env,
           offer_id=getattr(args, "offer_id", None),
-          gpu_count=args.gpu_count
+          gpu_count=args.gpu_count,
+          min_duration=getattr(args, "min_duration", None)
       )
     except Exception as e:
       fatal(f"Failed to create Vast.ai instance: {e}", exc=e.__class__)
@@ -1710,6 +1714,7 @@ def cmd_info(args):
     if uptime_sec is None or uptime_sec == 0:
       uptime_sec = pod_info.get("uptimeSeconds")
     uptime_str = format_uptime(uptime_sec)
+    expiration_str = format_expiration(pod_info.get("end_date") or pod_info.get("expiration") or pod_info.get("expires_at"))
 
     created_at = pod_info.get("createdAt") or pod_info.get("lastStatusChange") or ""
     if created_at and "T" in created_at:
@@ -1799,6 +1804,8 @@ def cmd_info(args):
       print(f"Uptime:         {uptime_str} (created: {created_display})")
     else:
       print(f"Uptime:         {uptime_str}")
+    if expiration_str:
+      print(f"Expiration:     {expiration_str}")
     print(f"Cost:           {cost_str}")
     print(f"Datacenter:     {loc_str}")
     print()
@@ -1873,6 +1880,7 @@ def cmd_info(args):
         except (ValueError, TypeError):
           pass
     uptime_str = format_uptime(uptime_sec)
+    expiration_str = format_expiration(raw.get("end_date") or raw.get("expiration") or raw.get("expires_at"))
 
     created_at = raw.get("createdAt") or raw.get("created_at") or raw.get("start_date") or ""
     created_display = ""
@@ -1961,6 +1969,8 @@ def cmd_info(args):
       print(f"Uptime:         {uptime_str} (created: {created_display})")
     else:
       print(f"Uptime:         {uptime_str}")
+    if expiration_str:
+      print(f"Expiration:     {expiration_str}")
     print(f"Cost:           {cost_str}")
     print(f"Datacenter:     {location}")
     print()
@@ -2095,6 +2105,14 @@ def cmd_gpus(args):
       fatal(f"Invalid regex pattern '{filter_pattern}': {e}", ValueError)
 
   expand = getattr(args, "expand", False)
+  min_dur_arg = getattr(args, "min_duration", None)
+  min_dur_hours = None
+  if min_dur_arg:
+    try:
+      min_dur_hours = parse_duration_hours(min_dur_arg)
+    except ValueError as e:
+      fatal(str(e), ValueError)
+
   if provider.name in ("vast", "spheron", "cloudrift", "lium"):
     if provider.name == "vast":
       prov_label = "Vast.ai"
@@ -2106,7 +2124,13 @@ def cmd_gpus(args):
       prov_label = "Lium"
     print(f"Fetching available GPU types on {prov_label}...")
     try:
-      gpus = provider.list_gpus(filter_pattern, expand=expand)
+      if min_dur_hours is not None:
+        try:
+          gpus = provider.list_gpus(filter_pattern, expand=expand, min_duration_hours=min_dur_hours)
+        except TypeError:
+          gpus = provider.list_gpus(filter_pattern, expand=expand)
+      else:
+        gpus = provider.list_gpus(filter_pattern, expand=expand)
     except Exception as e:
       fatal(f"Failed to retrieve GPUs: {e}", exc=e.__class__)
 
@@ -2118,6 +2142,56 @@ def cmd_gpus(args):
       return
 
     if expand:
+      has_duration = any(
+          (o.get("maxDurationHours") is not None
+           or o.get("duration_hours") is not None
+           or o.get("duration") is not None
+           or o.get("end_date") is not None)
+          for o in gpus
+      )
+      if has_duration:
+        print(f"{'OFFER ID':<10} | {'GPU MODEL':<20} | {'GPUS':<5} | {'VRAM':<8} | {'PRICE':<10} | {'RELIABILITY':<12} | {'MAX DURATION':<14} | {'INET (DOWN/UP)':<18} | {'DISK':<9} | {'LOCATION'}")
+        print("-" * 131)
+        for o in gpus:
+          offer_id = str(o.get("id") or o.get("offerId") or "N/A")
+          gpu_name = str(o.get("gpu_name") or o.get("gpuType") or o.get("displayName") or "Unknown")
+          num_gpus = f"{o.get('num_gpus') or o.get('gpuCount') or 1}x"
+          vram = o.get("gpu_ram") or (o.get("memoryInGb") * 1024 if o.get("memoryInGb") else 0)
+          vram_gb = vram // 1024 if vram > 128 else vram
+          vram_str = f"{int(vram_gb)} GB" if vram_gb else "N/A"
+          dph = o.get("dph_total") if o.get("dph_total") is not None else (o.get("pricePerHour") or o.get("minPrice"))
+          price_str = f"${dph:.3f}/hr" if isinstance(dph, (int, float)) else "N/A"
+          rel = o.get("reliability2")
+          rel_str = f"{rel * 100:.1f}%" if isinstance(rel, (int, float)) else "N/A"
+          dur_val = o.get("duration_hours")
+          if dur_val is None:
+            end_d = o.get("end_date")
+            if end_d:
+              try:
+                e_ts = float(end_d)
+                if e_ts > 1e8:
+                  dur_val = max(0.0, (e_ts - time.time()) / 3600.0)
+              except Exception:
+                pass
+            if dur_val is None and o.get("duration"):
+              try:
+                d_val = float(o.get("duration"))
+                dur_val = d_val / 3600.0 if d_val > 500 else d_val * 24.0
+              except Exception:
+                pass
+          dur_str = format_duration_hours(dur_val)
+          down = o.get("inet_down")
+          up = o.get("inet_up")
+          if down is not None and up is not None:
+            inet_str = f"{int(down)}/{int(up)} Mbps"
+          else:
+            inet_str = "N/A"
+          disk = o.get("disk_space") or o.get("disk")
+          disk_str = f"{int(disk)} GB" if disk else "N/A"
+          loc = o.get("geolocation") or o.get("country") or o.get("region") or "N/A"
+          print(f"{offer_id:<10} | {gpu_name:<20} | {num_gpus:<5} | {vram_str:<8} | {price_str:<10} | {rel_str:<12} | {dur_str:<14} | {inet_str:<18} | {disk_str:<9} | {loc}")
+        return
+
       print(f"{'OFFER ID':<10} | {'GPU MODEL':<20} | {'GPUS':<5} | {'VRAM':<8} | {'PRICE':<10} | {'RELIABILITY':<12} | {'INET (DOWN/UP)':<18} | {'DISK':<9} | {'LOCATION'}")
       print("-" * 115)
       for o in gpus:
@@ -2141,6 +2215,24 @@ def cmd_gpus(args):
         disk_str = f"{int(disk)} GB" if disk else "N/A"
         loc = o.get("geolocation") or o.get("country") or o.get("region") or "N/A"
         print(f"{offer_id:<10} | {gpu_name:<20} | {num_gpus:<5} | {vram_str:<8} | {price_str:<10} | {rel_str:<12} | {inet_str:<18} | {disk_str:<9} | {loc}")
+      return
+
+    has_duration = any(
+        (g.get("maxDurationHours") is not None
+         or g.get("maxDuration") is not None
+         or g.get("duration") is not None)
+        for g in gpus
+    )
+    if has_duration:
+      print(f"{'GPU MODEL':<25} | {'VRAM':<10} | {'MIN PRICE':<12} | {'MAX PRICE':<12} | {'MAX DURATION':<14} | {'AVAILABLE'}")
+      print("-" * 95)
+      for g in gpus:
+        vram_str = f"{g['memoryInGb']} GB" if g.get("memoryInGb") else "N/A"
+        min_p = f"${g['minPrice']:.2f}/hr" if g.get("minPrice") is not None else "N/A"
+        max_p = f"${g['maxPrice']:.2f}/hr" if g.get("maxPrice") is not None else "N/A"
+        dur_val = g.get("maxDurationHours") if g.get("maxDurationHours") is not None else g.get("maxDuration")
+        dur_str = format_duration_hours(dur_val)
+        print(f"{g['displayName']:<25} | {vram_str:<10} | {min_p:<12} | {max_p:<12} | {dur_str:<14} | {g['count']} offers")
       return
 
     print(f"{'GPU MODEL':<25} | {'VRAM':<10} | {'MIN PRICE':<12} | {'MAX PRICE':<12} | {'AVAILABLE'}")
@@ -2500,6 +2592,13 @@ def main(args=None):
       "--proxy-allow-write",
       default=None,
       help="Semicolon-separated path/bucket patterns permitted for write operations through the proxy"
+  )
+  create_parser.add_argument(
+      "--min-duration",
+      "--min_duration",
+      dest="min_duration",
+      default=None,
+      help="Minimum rental duration before expiration (e.g. '24h', '7d', '168'). Filters out short-lived offers."
   )
 
   # Register provider-specific create arguments and subcommands
@@ -3159,6 +3258,13 @@ def main(args=None):
       dest="expand",
       default=False,
       help="Expand list to show individual marketplace offerings (e.g. for Vast.ai)"
+  )
+  gpus_parser.add_argument(
+      "--min-duration",
+      "--min_duration",
+      dest="min_duration",
+      default=None,
+      help="Filter offers by minimum rental duration (e.g. '24h', '7d', '168')"
   )
 
   # Templates Command
