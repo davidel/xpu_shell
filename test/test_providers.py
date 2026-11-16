@@ -2026,9 +2026,12 @@ class TestDurationAndExpiration(BaseProviderTestCase):
     with patch.object(sys, "argv", test_args):
       cli.main()
 
-    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    printed_lines = [call[0][0] for call in mock_print.call_args_list if call[0]]
+    output = "\n".join(printed_lines)
     self.assertIn("MAX DURATION", output)
     self.assertIn("72h", output)
+    header_idx = next(i for i, line in enumerate(printed_lines) if "MAX DURATION" in line)
+    self.assertEqual(printed_lines[header_idx + 1], "-" * len(printed_lines[header_idx]))
 
   @patch("xpu_shell.cli.resolve_provider")
   @patch("builtins.print")
@@ -2056,9 +2059,12 @@ class TestDurationAndExpiration(BaseProviderTestCase):
     with patch.object(sys, "argv", test_args):
       cli.main()
 
-    output = "\n".join(call[0][0] for call in mock_print.call_args_list if call[0])
+    printed_lines = [call[0][0] for call in mock_print.call_args_list if call[0]]
+    output = "\n".join(printed_lines)
     self.assertIn("MAX DURATION", output)
     self.assertIn("168h", output)
+    header_idx = next(i for i, line in enumerate(printed_lines) if "MAX DURATION" in line)
+    self.assertEqual(printed_lines[header_idx + 1], "-" * len(printed_lines[header_idx]))
 
   @patch("xpu_shell.providers.vast_provider.VastProvider.create_instance")
   @patch("xpu_shell.providers.vast_provider.VastProvider.get_instance")

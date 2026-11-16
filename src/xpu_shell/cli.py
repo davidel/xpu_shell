@@ -2150,8 +2150,9 @@ def cmd_gpus(args):
           for o in gpus
       )
       if has_duration:
-        print(f"{'OFFER ID':<10} | {'GPU MODEL':<20} | {'GPUS':<5} | {'VRAM':<8} | {'PRICE':<10} | {'RELIABILITY':<12} | {'MAX DURATION':<14} | {'INET (DOWN/UP)':<18} | {'DISK':<9} | {'LOCATION'}")
-        print("-" * 131)
+        header = f"{'OFFER ID':<10} | {'GPU MODEL':<20} | {'GPUS':<5} | {'VRAM':<8} | {'PRICE':<10} | {'RELIABILITY':<12} | {'MAX DURATION':<14} | {'INET (DOWN/UP)':<18} | {'DISK':<9} | {'LOCATION'}"
+        print(header)
+        print("-" * len(header))
         for o in gpus:
           offer_id = str(o.get("id") or o.get("offerId") or "N/A")
           gpu_name = str(o.get("gpu_name") or o.get("gpuType") or o.get("displayName") or "Unknown")
@@ -2192,8 +2193,9 @@ def cmd_gpus(args):
           print(f"{offer_id:<10} | {gpu_name:<20} | {num_gpus:<5} | {vram_str:<8} | {price_str:<10} | {rel_str:<12} | {dur_str:<14} | {inet_str:<18} | {disk_str:<9} | {loc}")
         return
 
-      print(f"{'OFFER ID':<10} | {'GPU MODEL':<20} | {'GPUS':<5} | {'VRAM':<8} | {'PRICE':<10} | {'RELIABILITY':<12} | {'INET (DOWN/UP)':<18} | {'DISK':<9} | {'LOCATION'}")
-      print("-" * 115)
+      header = f"{'OFFER ID':<10} | {'GPU MODEL':<20} | {'GPUS':<5} | {'VRAM':<8} | {'PRICE':<10} | {'RELIABILITY':<12} | {'INET (DOWN/UP)':<18} | {'DISK':<9} | {'LOCATION'}"
+      print(header)
+      print("-" * len(header))
       for o in gpus:
         offer_id = str(o.get("id") or o.get("offerId") or "N/A")
         gpu_name = str(o.get("gpu_name") or o.get("gpuType") or o.get("displayName") or "Unknown")
@@ -2224,8 +2226,9 @@ def cmd_gpus(args):
         for g in gpus
     )
     if has_duration:
-      print(f"{'GPU MODEL':<25} | {'VRAM':<10} | {'MIN PRICE':<12} | {'MAX PRICE':<12} | {'MAX DURATION':<14} | {'AVAILABLE'}")
-      print("-" * 95)
+      header = f"{'GPU MODEL':<25} | {'VRAM':<10} | {'MIN PRICE':<12} | {'MAX PRICE':<12} | {'MAX DURATION':<14} | {'AVAILABLE'}"
+      print(header)
+      print("-" * len(header))
       for g in gpus:
         vram_str = f"{g['memoryInGb']} GB" if g.get("memoryInGb") else "N/A"
         min_p = f"${g['minPrice']:.2f}/hr" if g.get("minPrice") is not None else "N/A"
@@ -2235,8 +2238,9 @@ def cmd_gpus(args):
         print(f"{g['displayName']:<25} | {vram_str:<10} | {min_p:<12} | {max_p:<12} | {dur_str:<14} | {g['count']} offers")
       return
 
-    print(f"{'GPU MODEL':<25} | {'VRAM':<10} | {'MIN PRICE':<12} | {'MAX PRICE':<12} | {'AVAILABLE'}")
-    print("-" * 80)
+    header = f"{'GPU MODEL':<25} | {'VRAM':<10} | {'MIN PRICE':<12} | {'MAX PRICE':<12} | {'AVAILABLE'}"
+    print(header)
+    print("-" * len(header))
     for g in gpus:
       vram_str = f"{g['memoryInGb']} GB" if g.get("memoryInGb") else "N/A"
       min_p = f"${g['minPrice']:.2f}/hr" if g.get("minPrice") is not None else "N/A"
