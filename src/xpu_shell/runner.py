@@ -24,13 +24,21 @@ import time
 
 
 def get_base_dir():
+  env_base = os.environ.get("XPU_RUNNER_BASE_DIR") or os.environ.get("RUNPOD_RUNNER_BASE_DIR")
+  if env_base:
+    return Path(env_base)
   if os.path.isdir("/workspace"):
     return Path("/workspace")
   return Path("/tmp")
 
 
 def get_jobs_dirs():
-  return [Path("/workspace/.runpod_jobs"), Path("/tmp/.runpod_jobs")]
+  base = get_base_dir()
+  dirs = [base / ".runpod_jobs" if base.name != ".runpod_jobs" else base]
+  for default_base in [Path("/workspace/.runpod_jobs"), Path("/tmp/.runpod_jobs")]:
+    if default_base not in dirs:
+      dirs.append(default_base)
+  return dirs
 
 
 def allocate_job_id(prefix="job-", base_dir=None):
@@ -147,11 +155,17 @@ def is_pgid_alive(pgid):
 
 
 def cmd_run(args):
+  base_dir = Path(args.base_dir) if getattr(args, "base_dir", None) else None
+  if not base_dir and getattr(args, "job_dir", None):
+    p = Path(args.job_dir).parent
+    base_dir = p.parent if p.name == ".runpod_jobs" else p
+  if not base_dir:
+    base_dir = get_base_dir()
+
   job_id = getattr(args, "job_id", None)
   if not job_id:
-    job_id = allocate_job_id()
+    job_id = allocate_job_id(base_dir=base_dir)
 
-  base_dir = get_base_dir()
   if getattr(args, "job_dir", None):
     job_dir = Path(args.job_dir)
   else:
@@ -429,7 +443,8 @@ def cmd_spawn(args):
       "run",
       "--job-id", str(job_id),
       "--job-dir", str(job_dir),
-      "--log-file", str(log_file)
+      "--log-file", str(log_file),
+      "--base-dir", str(base_dir)
   ]
   if getattr(args, "script", None):
     run_cmd.extend(["--script", str(args.script)])
@@ -701,6 +716,7 @@ def main():
   run_p.add_argument("--job-dir", default=None)
   run_p.add_argument("--log-file", default=None)
   run_p.add_argument("--work-dir", default="")
+  run_p.add_argument("--base-dir", default=None)
   run_p.add_argument("--shell", action="store_true", default=False)
   run_p.add_argument("--name", default=None)
   run_p.add_argument("-v", "--verbose", action="store_true", default=False)

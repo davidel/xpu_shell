@@ -7,6 +7,8 @@ import tempfile
 import time
 import unittest
 
+from unittest.mock import patch
+
 import xpu_shell.runner as runner
 
 
@@ -15,6 +17,18 @@ RUNNER_PATH = Path(__file__).parent.parent / "src" / "xpu_shell" / "runner.py"
 
 
 class TestRunnerScript(unittest.TestCase):
+
+  def setUp(self):
+    self._runner_temp_dir = tempfile.TemporaryDirectory()
+    self._runner_env_patcher = patch.dict(os.environ, {
+        "XPU_RUNNER_BASE_DIR": self._runner_temp_dir.name,
+        "RUNPOD_RUNNER_BASE_DIR": self._runner_temp_dir.name
+    })
+    self._runner_env_patcher.start()
+
+  def tearDown(self):
+    self._runner_env_patcher.stop()
+    self._runner_temp_dir.cleanup()
 
   def test_runner_run_and_list_success(self):
     with tempfile.TemporaryDirectory() as td:
@@ -421,7 +435,8 @@ class TestRunnerScript(unittest.TestCase):
           "--cmd", "echo auto-job",
           "--job-dir", str(jobs_dir / "job-1"),
           "--log-file", str(log_file),
-          "--work-dir", str(tdp)
+          "--work-dir", str(tdp),
+          "--base-dir", str(tdp)
       ], capture_output=True, text=True)
       self.assertEqual(res.returncode, 0)
       meta = json.loads((jobs_dir / "job-1" / "meta.json").read_text())
@@ -453,7 +468,8 @@ class TestRunnerScript(unittest.TestCase):
           str(RUNNER_PATH),
           "spawn",
           "--cmd", "echo spawn-success",
-          "--work-dir", str(tdp)
+          "--work-dir", str(tdp),
+          "--base-dir", str(tdp)
       ], capture_output=True, text=True)
 
       self.assertEqual(res.returncode, 0)
@@ -462,6 +478,8 @@ class TestRunnerScript(unittest.TestCase):
       self.assertIn("LOG_FILE:", output)
       self.assertIn("JOB_ID:job-", output)
 
+      pid_line = [l for l in output.splitlines() if l.startswith("PID:")][0]
+      child_pid = int(pid_line.split("PID:", 1)[1].strip())
       log_file_line = [l for l in output.splitlines() if l.startswith("LOG_FILE:")][0]
       log_file = Path(log_file_line.split("LOG_FILE:", 1)[1].strip())
 
@@ -471,11 +489,45 @@ class TestRunnerScript(unittest.TestCase):
         time.sleep(0.1)
       self.assertTrue(log_file.exists())
       self.assertIn("spawn-success", log_file.read_text())
-      # Clean up log file
+      try:
+        os.waitpid(child_pid, 0)
+      except (ChildProcessError, OSError):
+        pass
       try:
         log_file.unlink()
       except OSError:
         pass
+
+  def test_runner_execution_leaves_no_artifacts_in_tmp(self):
+    before = set(os.listdir("/tmp"))
+    with tempfile.TemporaryDirectory() as td:
+      tdp = Path(td)
+      res = subprocess.run([
+          sys.executable,
+          str(RUNNER_PATH),
+          "spawn",
+          "--cmd", "echo test-clean",
+          "--work-dir", str(tdp),
+          "--base-dir", str(tdp)
+      ], capture_output=True, text=True)
+      self.assertEqual(res.returncode, 0)
+      output = res.stdout
+      pid_line = [l for l in output.splitlines() if l.startswith("PID:")][0]
+      child_pid = int(pid_line.split("PID:", 1)[1].strip())
+      log_file_line = [l for l in output.splitlines() if l.startswith("LOG_FILE:")][0]
+      log_file = Path(log_file_line.split("LOG_FILE:", 1)[1].strip())
+      for _ in range(50):
+        if log_file.exists() and "test-clean" in log_file.read_text():
+          break
+        time.sleep(0.1)
+      self.assertTrue(log_file.exists())
+      try:
+        os.waitpid(child_pid, 0)
+      except (ChildProcessError, OSError):
+        pass
+
+    after = set(os.listdir("/tmp"))
+    self.assertEqual(after - before, set())
 
   def test_runner_spawn_script_strips_upload_prefix(self):
     with tempfile.TemporaryDirectory() as td:
@@ -495,6 +547,8 @@ class TestRunnerScript(unittest.TestCase):
 
       self.assertEqual(res.returncode, 0)
       output = res.stdout
+      pid_line = [l for l in output.splitlines() if l.startswith("PID:")][0]
+      child_pid = int(pid_line.split("PID:", 1)[1].strip())
       log_file_line = [l for l in output.splitlines() if l.startswith("LOG_FILE:")][0]
       log_file = Path(log_file_line.split("LOG_FILE:", 1)[1].strip())
       self.assertEqual(log_file.name, "job-1_finetune_uvito.sh.log")
@@ -504,6 +558,10 @@ class TestRunnerScript(unittest.TestCase):
           break
         time.sleep(0.1)
       self.assertTrue(log_file.exists())
+      try:
+        os.waitpid(child_pid, 0)
+      except (ChildProcessError, OSError):
+        pass
       try:
         log_file.unlink()
       except OSError:

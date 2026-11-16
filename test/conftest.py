@@ -8,4 +8,6 @@ def isolate_xpu_shell_config(monkeypatch):
   with tempfile.TemporaryDirectory() as td:
     monkeypatch.setenv("XPU_SHELL_CONFIG_DIR", td)
     monkeypatch.setenv("RUNPOD_SHELL_CONFIG_DIR", td)
+    monkeypatch.setenv("XPU_RUNNER_BASE_DIR", td)
+    monkeypatch.setenv("RUNPOD_RUNNER_BASE_DIR", td)
     yield td
